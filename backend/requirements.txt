@@ -1,0 +1,25 @@
+# LangGraph / LangChain
+langgraph
+langchain
+langchain-google-genai
+
+# Environment
+python-dotenv
+
+# Backend API
+fastapi
+uvicorn
+
+# Data validation
+pydantic
+
+# RAG / Documents
+pymupdf
+chromadb
+sentence-transformers
+
+# Google APIs
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
