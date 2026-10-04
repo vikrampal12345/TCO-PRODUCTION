@@ -1,70 +1,84 @@
-from typing import TypedDict
+from typing import Any, TypedDict
+
+from backend.core.task import Task
 
 
 class TCOState(TypedDict, total=False):
 
-    # ============================================================
-    # Teacher Input
-    # ============================================================
+    # REQUEST / EXECUTION CONTEXT
+    request_id: str
+    teacher_id: str
+    school_id: str
+    conversation_id: str
     teacher_request: str
 
-    # ============================================================
-    # Master Agent
-    # ============================================================
+    # MASTER AGENT DECISION
     intent: str
     language: str
     next_action: str
+    required_capability: str | None
 
-    # ============================================================
-    # Extracted Information
-    # ============================================================
+    # CURRENT TASK
+    current_task: Task | None
+
+    # ASSESSMENT REQUIREMENTS
+    class_level: str
+    subject: str
+    chapter: str
     topic: str
     marks: int
     question_count: int
     student_name: str
-
-    # ============================================================
-    # Clarification
-    # ============================================================
     missing_information: list[str]
     clarification_message: str
 
-    # ============================================================
-    # Source / RAG
-    # ============================================================
+    # GENERATION POLICY
     generation_mode: str
+
+    # SOURCE / RESEARCH
     source: str
+    requested_source: str
     source_available: bool
     source_status: str
+    source_candidates: list[dict]
+    selected_source: dict
+    source_approved: bool
     retrieved_context: str
-    reference_questions: list[str]
     source_references: list[str]
 
-    # ============================================================
-    # Assessment
-    # ============================================================
+    # ASSESSMENT OUTPUT
     questions: list
     answer_key: list
     marking_scheme: list
 
-    # ============================================================
-    # Human Approval
-    # ============================================================
-    approved: bool
+    # VALIDATION
+    validation_status: str
+    validation_errors: list[str]
 
-    # ============================================================
-    # Google Classroom
-    # ============================================================
+    # HUMAN-IN-THE-LOOP
+    approval_required: bool
+    approval_type: str
+    approval_status: str
+    approved_by: str
+    approval_comment: str
+    approved_at: str
+
+    # DOWNSTREAM
     assignment_id: str
     submissions: list
-
-    # ============================================================
-    # Evaluation
-    # ============================================================
     evaluation_results: list
 
-    # ============================================================
-    # Workflow
-    # ============================================================
+    # STATUS
     status: str
     assessment_message: str
+
+    # ERROR
+    error_code: str
+    error_message: str
+    metadata: dict[str, Any]
+
+    # ASSESSMENT REVIEW
+    assessment_review_status: str
+    assessment_review_feedback: str
+    assessment_review_attempts: int
+    assessment_max_review_attempts: int

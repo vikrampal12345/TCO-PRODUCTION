@@ -268,4 +268,26 @@ other
 
 The final decision must contain only information supported by
 the teacher's request.
+
+
+==================================================
+SOURCE IDENTIFICATION
+==================================================
+
+If the teacher explicitly names an organization,
+board, website, textbook, or source, extract it
+as requested_source.
+
+Examples:
+
+"NCERT Class 10 Science"
+→ requested_source = "NCERT"
+
+"CBSE Class 10 Maths"
+→ requested_source = "CBSE"
+
+"Use GeeksforGeeks"
+→ requested_source = "GeeksforGeeks"
+
+Never invent a requested source.
 """
