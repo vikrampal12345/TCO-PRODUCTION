@@ -185,3 +185,47 @@ class TCOState(
     assessment_review_attempts: int
 
     assessment_max_review_attempts: int
+
+    # ========================================================
+    # SOURCE / RESEARCH
+    # ========================================================
+
+    source: str
+
+    requested_source: str
+
+    source_url: str
+
+    source_available: bool
+
+    source_status: str
+
+    source_candidates: list[dict[str, Any]]
+
+    selected_source: dict[str, Any]
+
+    source_approved: bool
+
+    retrieved_context: str
+
+    source_references: list[str]
+
+    reference_questions: list
+
+    # ========================================================
+    # TEACHER FILE / WEB SOURCE
+    # ========================================================
+
+    uploaded_file_path: str
+
+    uploaded_file_name: str
+
+    uploaded_file_type: str
+
+    uploaded_source_id: str
+
+    web_source_fetched: bool
+
+    web_source_content_path: str
+
+    knowledge_source: str

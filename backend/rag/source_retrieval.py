@@ -14,10 +14,19 @@ from backend.services.classroom_ingestion import (
     ClassroomIngestionError,
     ClassroomIngestionService,
 )
+from backend.services.file_ingestion import (
+    FileIngestionError,
+    TeacherFileIngestionService,
+)
 
 
 DEFAULT_TOP_K = 5
 DEFAULT_SIMILARITY_THRESHOLD = 0.30
+
+
+# ============================================================
+# TEXT HELPERS
+# ============================================================
 
 
 def _normalize_text(
@@ -81,6 +90,11 @@ def _query_terms(
     }
 
 
+# ============================================================
+# CLASSROOM ATTACHMENT SCORING
+# ============================================================
+
+
 def _attachment_score(
     attachment: dict[str, Any],
     query: str,
@@ -118,8 +132,6 @@ def _attachment_score(
         if term in title.split():
             score += 10.0
 
-    # Small preference for a downloadable/exportable
-    # supported attachment.
     mode = str(
         attachment.get(
             "mode",
@@ -169,8 +181,6 @@ def _select_best_attachment(
             if score < 0:
                 continue
 
-            # Material relevance remains the primary
-            # signal; attachment matching breaks ties.
             material_score = float(
                 material.get(
                     "relevance_score",
@@ -202,6 +212,11 @@ def _select_best_attachment(
         best_material,
         best_attachment,
     )
+
+
+# ============================================================
+# CLASSROOM COURSE RESOLUTION
+# ============================================================
 
 
 def _resolve_course_id(
@@ -307,8 +322,13 @@ def _resolve_course_id(
     )
 
 
+# ============================================================
+# RAG QUERY BUILDER
+# ============================================================
+
+
 def _build_rag_query(
-    state: TCOState,
+    state: dict[str, Any],
 ) -> str:
 
     parts = [
@@ -370,25 +390,500 @@ def _build_rag_query(
     ).strip()
 
 
+# ============================================================
+# TEACHER FILE RETRIEVAL
+# ============================================================
+
+
+def _retrieve_teacher_file(
+    state: dict[str, Any],
+) -> dict[str, Any]:
+
+    uploaded_file_path = str(
+        state.get(
+            "uploaded_file_path",
+            "",
+        )
+        or ""
+    ).strip()
+
+    teacher_id = str(
+        state.get(
+            "teacher_id",
+            "",
+        )
+        or ""
+    ).strip()
+
+    school_id = str(
+        state.get(
+            "school_id",
+            "",
+        )
+        or ""
+    ).strip()
+
+    conversation_id = str(
+        state.get(
+            "conversation_id",
+            "",
+        )
+        or ""
+    ).strip()
+
+    topic = str(
+        state.get(
+            "topic",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if not uploaded_file_path:
+        return {
+            **state,
+            "source_available": False,
+            "source_status": "missing_uploaded_file",
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "waiting_for_teacher",
+            "clarification_message": (
+                "Please upload a valid reference file."
+            ),
+        }
+
+    if not teacher_id:
+        return {
+            **state,
+            "source_available": False,
+            "source_status": "missing_teacher_context",
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "waiting_for_teacher",
+            "clarification_message": (
+                "Teacher ID is required to process "
+                "the uploaded reference material."
+            ),
+        }
+
+    if not school_id:
+        return {
+            **state,
+            "source_available": False,
+            "source_status": "missing_school_context",
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "waiting_for_teacher",
+            "clarification_message": (
+                "School ID is required to process "
+                "the uploaded reference material."
+            ),
+        }
+
+    if not topic:
+        return {
+            **state,
+            "source_available": False,
+            "source_status": "missing_topic",
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "waiting_for_teacher",
+            "clarification_message": (
+                "Please provide the topic for the "
+                "assessment."
+            ),
+        }
+
+    ingestion_service = (
+        TeacherFileIngestionService()
+    )
+
+    # ========================================================
+    # 1. INGEST TEACHER FILE
+    # ========================================================
+
+    try:
+        ingestion_result = (
+            ingestion_service.ingest(
+                uploaded_file_path,
+                teacher_id=teacher_id,
+                school_id=school_id,
+                conversation_id=conversation_id,
+            )
+        )
+
+    except FileIngestionError as exc:
+        return {
+            **state,
+            "source_available": False,
+            "source_status": (
+                "teacher_file_ingestion_failed"
+            ),
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "source_ingestion_failed",
+            "error_code": (
+                "TEACHER_FILE_INGESTION_FAILED"
+            ),
+            "error_message": str(exc),
+            "clarification_message": (
+                "I could not process the uploaded "
+                "reference material."
+            ),
+        }
+
+    except Exception as exc:
+        return {
+            **state,
+            "source_available": False,
+            "source_status": (
+                "teacher_file_ingestion_failed"
+            ),
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "source_ingestion_failed",
+            "error_code": (
+                "TEACHER_FILE_INGESTION_UNEXPECTED_ERROR"
+            ),
+            "error_message": str(exc),
+            "clarification_message": (
+                "An unexpected error occurred while "
+                "processing the uploaded reference material."
+            ),
+        }
+
+    source_id = str(
+        ingestion_result.get(
+            "source_id",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if not source_id:
+        return {
+            **state,
+            "source_available": False,
+            "source_status": (
+                "missing_teacher_file_source_id"
+            ),
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "source_ingestion_failed",
+            "error_code": (
+                "TEACHER_FILE_SOURCE_ID_MISSING"
+            ),
+            "error_message": (
+                "Teacher file ingestion succeeded, "
+                "but no source_id was returned."
+            ),
+            "clarification_message": (
+                "The uploaded file was processed, "
+                "but TCO could not identify its RAG source."
+            ),
+        }
+
+    file_path = str(
+        ingestion_result.get(
+            "file_path",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if not file_path:
+        return {
+            **state,
+            "source_available": False,
+            "source_status": (
+                "missing_teacher_file_path"
+            ),
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "source_ingestion_failed",
+            "error_code": (
+                "TEACHER_FILE_PATH_MISSING"
+            ),
+            "error_message": (
+                "Teacher file ingestion succeeded, "
+                "but no file path was returned."
+            ),
+            "clarification_message": (
+                "The uploaded file was processed, "
+                "but TCO could not locate the processed file."
+            ),
+        }
+
+    # ========================================================
+    # 2. BUILD RAG QUERY
+    # ========================================================
+
+    rag_query = _build_rag_query(
+        state
+    )
+
+    if not rag_query:
+        rag_query = topic
+
+    # ========================================================
+    # 3. RETRIEVE CONTEXT
+    # ========================================================
+
+    try:
+        context = retrieve_source_context(
+            query=rag_query,
+            source=file_path,
+            top_k=DEFAULT_TOP_K,
+            similarity_threshold=DEFAULT_SIMILARITY_THRESHOLD,
+        )
+
+    except Exception as exc:
+        return {
+            **state,
+            "source_available": False,
+            "source_status": (
+                "teacher_file_rag_failed"
+            ),
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "uploaded_file_path": file_path,
+            "uploaded_file_name": ingestion_result.get(
+                "file_name",
+                "",
+            ),
+            "uploaded_file_type": ingestion_result.get(
+                "file_type",
+                "",
+            ),
+            "uploaded_source_id": source_id,
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "source_rag_failed",
+            "error_code": (
+                "TEACHER_FILE_RAG_RETRIEVAL_FAILED"
+            ),
+            "error_message": str(exc),
+            "clarification_message": (
+                "The uploaded file was indexed, "
+                "but RAG retrieval failed."
+            ),
+            "knowledge_source": "teacher_file",
+            "metadata": {
+                **state.get(
+                    "metadata",
+                    {},
+                ),
+                "knowledge_source": "teacher_file",
+                "ingestion_result": ingestion_result,
+            },
+        }
+
+    if not context:
+        return {
+            **state,
+            "source_available": False,
+            "source_status": (
+                "no_relevant_teacher_file_context"
+            ),
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "uploaded_file_path": file_path,
+            "uploaded_file_name": ingestion_result.get(
+                "file_name",
+                "",
+            ),
+            "uploaded_file_type": ingestion_result.get(
+                "file_type",
+                "",
+            ),
+            "uploaded_source_id": source_id,
+            "selected_source": {
+                "title": ingestion_result.get(
+                    "file_name",
+                    "",
+                ),
+                "url": "",
+                "source_type": "teacher_file",
+                "approved": True,
+            },
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "source_not_found",
+            "clarification_message": (
+                f"I found the uploaded file for "
+                f"'{topic}', but could not retrieve "
+                "relevant content from it."
+            ),
+            "knowledge_source": "teacher_file",
+            "metadata": {
+                **state.get(
+                    "metadata",
+                    {},
+                ),
+                "knowledge_source": "teacher_file",
+                "ingestion_result": ingestion_result,
+            },
+        }
+
+    # ========================================================
+    # 4. BUILD SOURCE STATE
+    # ========================================================
+
+    file_name = str(
+        ingestion_result.get(
+            "file_name",
+            "",
+        )
+        or ""
+    ).strip()
+
+    file_type = str(
+        ingestion_result.get(
+            "file_type",
+            "",
+        )
+        or ""
+    ).strip()
+
+    selected_source = {
+        "title": file_name,
+        "url": "",
+        "source_type": "teacher_file",
+        "approved": True,
+    }
+
+    return {
+        **state,
+
+        "source": source_id,
+
+        "source_available": True,
+
+        "source_status": "source_ready",
+
+        # Teacher explicitly supplied this source.
+        "source_approved": True,
+
+        "approval_required": False,
+
+        "approval_type": "source",
+
+        "approval_status": "approved",
+
+        "approved_by": "teacher_uploaded",
+
+        "uploaded_file_path": file_path,
+
+        "uploaded_file_name": file_name,
+
+        "uploaded_file_type": file_type,
+
+        "uploaded_source_id": source_id,
+
+        "knowledge_source": "teacher_file",
+
+        "selected_source": selected_source,
+
+        "retrieved_context": context,
+
+        "source_references": [
+            source_id
+        ],
+
+        "next_action": "execute_task",
+
+        "status": "source_retrieved",
+
+        "metadata": {
+            **state.get(
+                "metadata",
+                {},
+            ),
+
+            "knowledge_source": "teacher_file",
+
+            "uploaded_file_name": file_name,
+
+            "uploaded_file_type": file_type,
+
+            "uploaded_source_id": source_id,
+
+            "ingestion_result": (
+                ingestion_result
+            ),
+        },
+    }
+
+
+# ============================================================
+# MAIN SOURCE RETRIEVAL
+# ============================================================
+
+
 def retrieve_source(
     state: dict[str, Any],
 ) -> dict[str, Any]:
     """
     Work Mode source retrieval.
 
-    Flow:
+    Priority currently implemented:
 
-        Teacher request
-            â†“
-        Classroom discovery
-            â†“
-        Select relevant supported attachment
-            â†“
-        Classroom ingestion
-            â†“
-        Source-specific RAG retrieval
+        Teacher uploaded file
+            ↓
+        Google Classroom
+            ↓
+        Ask teacher when no source is available
 
-    This node does not generate content.
+    Teacher-uploaded files are explicitly supplied
+    by the teacher and therefore treated as approved.
+
+    This node does not generate assessment content.
     """
 
     topic = str(
@@ -484,6 +979,27 @@ def retrieve_source(
             ),
         }
 
+    # ========================================================
+    # 0. TEACHER-UPLOADED FILE
+    # ========================================================
+
+    uploaded_file_path = str(
+        state.get(
+            "uploaded_file_path",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if uploaded_file_path:
+        return _retrieve_teacher_file(
+            state
+        )
+
+    # ========================================================
+    # CLASSROOM SERVICES
+    # ========================================================
+
     discovery_service = (
         ClassroomMaterialDiscoveryService()
     )
@@ -492,9 +1008,9 @@ def retrieve_source(
         ClassroomIngestionService()
     )
 
-    # =========================================================
+    # ========================================================
     # 1. RESOLVE CLASSROOM COURSE
-    # =========================================================
+    # ========================================================
 
     course_id, course_error = (
         _resolve_course_id(
@@ -523,9 +1039,9 @@ def retrieve_source(
 
     assert course_id is not None
 
-    # =========================================================
+    # ========================================================
     # 2. CLASSROOM DISCOVERY
-    # =========================================================
+    # ========================================================
 
     discovery_query = _build_rag_query(
         state
@@ -573,9 +1089,9 @@ def retrieve_source(
         or []
     )
 
-    # =========================================================
+    # ========================================================
     # 3. SELECT MATERIAL + ATTACHMENT
-    # =========================================================
+    # ========================================================
 
     selected_material, selected_attachment = (
         _select_best_attachment(
@@ -661,9 +1177,9 @@ def retrieve_source(
             ),
         }
 
-    # =========================================================
-    # 4. INGEST INTO COMMON RAG PIPELINE
-    # =========================================================
+    # ========================================================
+    # 4. CLASSROOM INGESTION
+    # ========================================================
 
     try:
         ingestion_result = (
@@ -745,9 +1261,9 @@ def retrieve_source(
             ),
         }
 
-    # =========================================================
-    # 5. SOURCE-SPECIFIC RAG RETRIEVAL
-    # =========================================================
+    # ========================================================
+    # 5. CLASSROOM RAG RETRIEVAL
+    # ========================================================
 
     rag_query = _build_rag_query(
         state
@@ -824,9 +1340,9 @@ def retrieve_source(
             ),
         }
 
-    # =========================================================
-    # 6. RETURN SOURCE-GROUNDED STATE
-    # =========================================================
+    # ========================================================
+    # 6. BUILD CLASSROOM SOURCE STATE
+    # ========================================================
 
     selected_source = {
         **selected_material,
@@ -856,11 +1372,16 @@ def retrieve_source(
 
         "source_status": "source_ready",
 
-        # Google Classroom is an authorized internal source in Work Mode.
+        # Google Classroom is an authorized internal source
+        # in the current Work Mode flow.
         "source_approved": True,
+
         "approval_required": False,
+
         "approval_type": "source",
+
         "approval_status": "approved",
+
         "approved_by": "classroom_authorized",
 
         "source_candidates": (
@@ -880,6 +1401,10 @@ def retrieve_source(
         "next_action": "execute_task",
 
         "status": "source_retrieved",
+
+        "knowledge_source": (
+            "google_classroom"
+        ),
 
         "metadata": {
             **state.get(
