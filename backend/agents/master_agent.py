@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any
 
 from backend.core.base_agent import BaseAgent
@@ -21,17 +23,19 @@ Your responsibility is to:
 1. Understand what the teacher wants.
 2. Identify the real task.
 3. Extract explicit requirements.
-4. Decide which CAPABILITY is required.
+4. Decide which registered CAPABILITY is required.
 5. Prepare the information needed by that capability.
 
-You DO NOT perform the specialist work yourself.
+You DO NOT perform specialist work yourself.
 
-You DO NOT generate assessment questions.
-You DO NOT directly analyze student performance.
-You DO NOT directly access the database.
-You DO NOT directly send emails.
-You DO NOT perform RAG.
-You DO NOT perform web search.
+You DO NOT:
+- generate assessment questions
+- directly analyze student performance
+- directly access the database
+- directly send emails
+- perform RAG
+- perform web search
+- directly access Google Classroom
 
 Those responsibilities belong to specialist agents or tools.
 
@@ -39,8 +43,7 @@ Those responsibilities belong to specialist agents or tools.
 CAPABILITY ROUTING
 ==================================================
 
-You will receive a list of capabilities currently registered
-in TCO.
+You will receive the live list of capabilities registered in TCO.
 
 You MUST select required_capability from that list.
 
@@ -55,31 +58,28 @@ evaluation.check
     -> evaluate student submissions
 
 analytics.performance
-    -> analyze performance
+    -> analyze student performance
 
 attendance.read
-    -> retrieve attendance records
+    -> retrieve attendance
 
 email.send
-    -> send an email
+    -> send email
 
 ==================================================
 AGENT VS TOOL
 ==================================================
 
-Use a specialist-agent capability when the request requires
-reasoning, planning, generation or domain-specific analysis.
+Use a specialist-agent capability when the request requires:
+- reasoning
+- planning
+- generation
+- domain-specific analysis
 
-Use a tool capability when the request is a concrete,
-deterministic action.
-
-Example:
-
-"Create a 20-mark Science test"
-    -> assessment.create
-
-"Show Rahul's attendance"
-    -> attendance.read
+Use a tool capability when the request is:
+- concrete
+- deterministic
+- an external action
 
 ==================================================
 ASSESSMENT
@@ -92,11 +92,11 @@ For an assessment request, these are mandatory:
 3. Total marks
 
 If any are missing:
-- Add the canonical field name to missing_information.
-- Do not create a task.
-- Do not guess the missing value.
+- add the canonical field name to missing_information
+- do not create a task
+- do not guess
 
-Canonical names:
+Canonical field names:
 
 topic
 question_count
@@ -107,9 +107,10 @@ SOURCE POLICY
 ==================================================
 
 Default generation_mode:
+
 source_grounded
 
-Use llm_generated ONLY when the teacher explicitly allows
+Use llm_generated ONLY when the teacher explicitly permits
 general AI knowledge.
 
 Examples:
@@ -122,7 +123,7 @@ Examples:
 If the teacher specifies a source such as NCERT:
 - preserve it in requested_source
 - do not invent a source
-- pass the source requirement to the assigned task
+- pass the source requirement to the task
 
 If the teacher asks TCO to find a source:
 - preserve that requirement
@@ -138,8 +139,8 @@ matching a keyword.
 Return exactly one required_capability when a valid capability
 is available.
 
-If the request cannot be mapped to an available capability,
-use:
+If the request cannot be mapped to an available capability:
+
 intent = "unknown"
 required_capability = null
 
@@ -158,14 +159,19 @@ class MasterAgent(BaseAgent):
         "to registered capabilities."
     )
 
-    # Master is the orchestrator, not a specialist provider.
+    # Master is an orchestrator, not a specialist provider.
     capabilities = ()
 
     def __init__(
         self,
         registry: ComponentRegistry | None = None,
-    ):
-        self.registry = registry or ComponentRegistry()
+    ) -> None:
+
+        self.registry = (
+            registry
+            if registry is not None
+            else ComponentRegistry()
+        )
 
         self.router = TaskRouter(self.registry)
 
@@ -175,24 +181,23 @@ class MasterAgent(BaseAgent):
 
     def _build_capability_catalog(self) -> str:
         """
-        Convert the live registry into a compact prompt section.
+        Build a live capability catalog from the registry.
 
-        The Master therefore does not need hard-coded knowledge
-        of every future agent/tool.
+        This keeps the Master independent of future agents/tools.
         """
 
         catalog = self.registry.get_capability_catalog()
 
-        lines = []
+        lines: list[str] = []
 
-        for item in catalog["agents"]:
+        for item in catalog.get("agents", []):
             lines.append(
                 f"- {item['capability']} "
                 f"[agent: {item['provider']}] "
                 f"{item['description']}"
             )
 
-        for item in catalog["tools"]:
+        for item in catalog.get("tools", []):
             lines.append(
                 f"- {item['capability']} "
                 f"[tool: {item['provider']}] "
@@ -204,15 +209,32 @@ class MasterAgent(BaseAgent):
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _assessment_next_action(
+        generation_mode: str,
+    ) -> str:
+        """
+        Determine whether an assessment requires the source/RAG
+        stage before execution.
+        """
+
+        if generation_mode == "llm_generated":
+            return "execute_task"
+
+        return "retrieve_source"
+
     def run(
         self,
         state: TCOState,
         task: dict[str, Any] | None = None,
     ) -> TCOState:
 
-        teacher_request = state.get(
-            "teacher_request",
-            "",
+        teacher_request = str(
+            state.get(
+                "teacher_request",
+                "",
+            )
+            or ""
         ).strip()
 
         if not teacher_request:
@@ -220,12 +242,13 @@ class MasterAgent(BaseAgent):
                 **state,
                 "intent": "unknown",
                 "required_capability": None,
+                "next_action": "ask_teacher",
                 "missing_information": [
                     "teacher_request"
                 ],
                 "clarification_message": (
-                    "Please provide the task you want TCO "
-                    "to perform."
+                    "Please provide the task you want "
+                    "TCO to perform."
                 ),
                 "status": "waiting_for_teacher",
             }
@@ -237,6 +260,11 @@ class MasterAgent(BaseAgent):
 
 AVAILABLE TCO CAPABILITIES:
 {capabilities}
+
+CURRENT EXECUTION CONTEXT:
+teacher_id = {state.get("teacher_id", "")}
+school_id = {state.get("school_id", "")}
+conversation_id = {state.get("conversation_id", "")}
 
 TEACHER REQUEST:
 {teacher_request}
@@ -250,14 +278,15 @@ TEACHER REQUEST:
         except Exception as exc:
             return {
                 **state,
+                "next_action": "end",
                 "status": "error",
                 "error_code": "MASTER_AGENT_FAILED",
                 "error_message": str(exc),
             }
 
-        # ---------------------------------------------------------
-        # Deterministic assessment validation
-        # ---------------------------------------------------------
+        # =====================================================
+        # DETERMINISTIC ASSESSMENT VALIDATION
+        # =====================================================
 
         missing = list(
             decision.missing_information
@@ -265,7 +294,10 @@ TEACHER REQUEST:
 
         if decision.intent == "assessment":
 
-            if not decision.topic and not decision.chapter:
+            if (
+                not decision.topic
+                and not decision.chapter
+            ):
                 if "topic" not in missing:
                     missing.append("topic")
 
@@ -277,17 +309,21 @@ TEACHER REQUEST:
                 if "marks" not in missing:
                     missing.append("marks")
 
-        # ---------------------------------------------------------
-        # Clarification
-        # ---------------------------------------------------------
+        # =====================================================
+        # CLARIFICATION MESSAGE
+        # =====================================================
 
         clarification_message = (
             decision.clarification_message
+            or ""
         )
 
-        if decision.intent == "assessment" and missing:
+        if (
+            decision.intent == "assessment"
+            and missing
+        ):
 
-            labels = []
+            labels: list[str] = []
 
             if "topic" in missing:
                 labels.append(
@@ -310,45 +346,62 @@ TEACHER REQUEST:
                 + "."
             )
 
-        # ---------------------------------------------------------
-        # Missing information means no task
-        # ---------------------------------------------------------
+        # =====================================================
+        # MISSING INFORMATION → ASK TEACHER
+        # =====================================================
 
         if missing:
             return {
                 **state,
+
                 "intent": decision.intent,
                 "language": decision.language,
+
                 "class_level": decision.class_level,
                 "subject": decision.subject,
                 "chapter": decision.chapter,
                 "topic": (
                     decision.topic
                     or decision.chapter
+                    or ""
                 ),
+
                 "marks": decision.marks,
                 "question_count": (
                     decision.question_count
                 ),
+
                 "generation_mode": (
                     decision.generation_mode
                 ),
+
                 "requested_source": (
                     decision.requested_source
                 ),
+
+                "source_preference": (
+                    decision.source_preference
+                ),
+
                 "required_capability": None,
+                "next_action": "ask_teacher",
+
                 "missing_information": missing,
+
                 "clarification_message": (
                     clarification_message
                 ),
+
                 "status": "waiting_for_teacher",
             }
 
-        # ---------------------------------------------------------
-        # Validate capability decision
-        # ---------------------------------------------------------
+        # =====================================================
+        # CAPABILITY VALIDATION
+        # =====================================================
 
-        capability = decision.required_capability
+        capability = (
+            decision.required_capability
+        )
 
         if not capability:
             return {
@@ -356,6 +409,7 @@ TEACHER REQUEST:
                 "intent": decision.intent,
                 "language": decision.language,
                 "required_capability": None,
+                "next_action": "end",
                 "clarification_message": (
                     "I couldn't determine which TCO "
                     "capability should handle this request."
@@ -366,101 +420,46 @@ TEACHER REQUEST:
 
         capability = capability.strip()
 
-        # Never allow the LLM to invent a capability.
         if not self.registry.has_capability(
             capability
         ):
             return {
                 **state,
+
                 "intent": decision.intent,
                 "language": decision.language,
+
                 "required_capability": capability,
+                "next_action": "end",
+
                 "status": "error",
-                "error_code": "CAPABILITY_NOT_AVAILABLE",
+
+                "error_code": (
+                    "CAPABILITY_NOT_AVAILABLE"
+                ),
+
                 "error_message": (
-                    f"No registered provider exists for "
-                    f"capability '{capability}'."
+                    "No registered provider exists "
+                    f"for capability '{capability}'."
                 ),
             }
 
-        # ---------------------------------------------------------
-        # Normalize topic
-        # ---------------------------------------------------------
+        # =====================================================
+        # NORMALIZE TOPIC
+        # =====================================================
 
         topic = (
             decision.topic
             or decision.chapter
+            or ""
         )
 
-        # ---------------------------------------------------------
-        # Create Task
-        # ---------------------------------------------------------
+        # =====================================================
+        # CREATE TASK
+        # =====================================================
 
         task_input = {
             "teacher_request": teacher_request,
-            "class_level": decision.class_level,
-            "subject": decision.subject,
-            "chapter": decision.chapter,
-            "topic": topic,
-            "student_name": decision.student_name,
-            "marks": decision.marks,
-            "question_count": decision.question_count,
-            "generation_mode": (
-                decision.generation_mode
-            ),
-            "requested_source": (
-                decision.requested_source
-            ),
-            "source_preference": (
-                decision.source_preference
-            ),
-            "source_url": decision.source_url,
-        }
-
-        new_task = Task(
-            capability=capability,
-            input_data=task_input,
-            metadata={
-                "request_id": state.get(
-                    "request_id"
-                ),
-                "teacher_id": state.get(
-                    "teacher_id"
-                ),
-                "conversation_id": state.get(
-                    "conversation_id"
-                ),
-            },
-        )
-
-        # ---------------------------------------------------------
-        # Route Task
-        # ---------------------------------------------------------
-
-        try:
-            provider, new_task = self.router.route(
-                new_task
-            )
-
-        except CapabilityNotFoundError as exc:
-            return {
-                **state,
-                "intent": decision.intent,
-                "required_capability": capability,
-                "status": "error",
-                "error_code": "TASK_ROUTING_FAILED",
-                "error_message": str(exc),
-            }
-
-        # ---------------------------------------------------------
-        # Save task information in state
-        # ---------------------------------------------------------
-
-        return {
-            **state,
-
-            "intent": decision.intent,
-            "language": decision.language,
 
             "class_level": decision.class_level,
             "subject": decision.subject,
@@ -478,33 +477,143 @@ TEACHER REQUEST:
                 decision.generation_mode
             ),
 
+            "requested_source": (
+                decision.requested_source
+            ),
+
+            "source_preference": (
+                decision.source_preference
+            ),
+
+            "source_url": decision.source_url,
+        }
+
+        new_task = Task(
+            capability=capability,
+            input_data=task_input,
+            metadata={
+                "request_id": state.get(
+                    "request_id"
+                ),
+                "teacher_id": state.get(
+                    "teacher_id"
+                ),
+                "school_id": state.get(
+                    "school_id"
+                ),
+                "conversation_id": state.get(
+                    "conversation_id"
+                ),
+            },
+        )
+
+        # =====================================================
+        # ROUTE TASK
+        # =====================================================
+
+        try:
+            provider, new_task = self.router.route(
+                new_task
+            )
+
+        except CapabilityNotFoundError as exc:
+            return {
+                **state,
+
+                "intent": decision.intent,
+                "required_capability": capability,
+
+                "next_action": "end",
+
+                "status": "error",
+
+                "error_code": (
+                    "TASK_ROUTING_FAILED"
+                ),
+
+                "error_message": str(exc),
+            }
+
+        # =====================================================
+        # DETERMINE GRAPH NEXT ACTION
+        # =====================================================
+
+        if decision.intent == "assessment":
+
+            next_action = (
+                self._assessment_next_action(
+                    decision.generation_mode
+                )
+            )
+
+        else:
+            next_action = "execute_task"
+
+        # =====================================================
+        # RETURN UPDATED STATE
+        # =====================================================
+
+        return {
+            **state,
+
+            "intent": decision.intent,
+            "language": decision.language,
+
+            "class_level": decision.class_level,
+            "subject": decision.subject,
+            "chapter": decision.chapter,
+            "topic": topic,
+
+            "student_name": (
+                decision.student_name
+            ),
+
+            "marks": decision.marks,
+            "question_count": (
+                decision.question_count
+            ),
+
+            "generation_mode": (
+                decision.generation_mode
+            ),
+
             "source": (
                 decision.source_url
-                or state.get("source")
+                or state.get("source", "")
             ),
 
             "requested_source": (
                 decision.requested_source
             ),
 
+            "source_preference": (
+                decision.source_preference
+            ),
+
             "required_capability": capability,
 
             "missing_information": [],
-
             "clarification_message": "",
 
             "current_task": new_task,
 
+            "next_action": next_action,
+
             "status": "task_assigned",
 
             "metadata": {
-                **state.get("metadata", {}),
+                **state.get(
+                    "metadata",
+                    {},
+                ),
 
                 "master_decision": (
                     decision.model_dump()
                 ),
 
-                "task_provider": provider.name,
+                "task_provider": (
+                    provider.name
+                ),
 
                 "task_status": (
                     new_task.status.value
@@ -513,12 +622,37 @@ TEACHER REQUEST:
         }
 
 
-# -------------------------------------------------------------
-# Backward-compatible instance/function
-# -------------------------------------------------------------
+# =============================================================
+# BACKWARD-COMPATIBLE LAZY DEFAULT INSTANCE
+# =============================================================
 
-_master_agent = MasterAgent()
+_master_agent: MasterAgent | None = None
 
 
-def master_agent(state: TCOState) -> TCOState:
-    return _master_agent.run(state)
+def _get_default_master_agent() -> MasterAgent:
+    """
+    Lazily build the default registry.
+
+    Lazy import avoids bootstrap/import-cycle problems.
+    """
+
+    global _master_agent
+
+    if _master_agent is None:
+        from backend.core.bootstrap import (
+            build_default_registry,
+        )
+
+        _master_agent = MasterAgent(
+            build_default_registry()
+        )
+
+    return _master_agent
+
+
+def master_agent(
+    state: TCOState,
+) -> TCOState:
+    return _get_default_master_agent().run(
+        state
+    )

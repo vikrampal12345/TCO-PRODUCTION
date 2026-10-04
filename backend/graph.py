@@ -1,22 +1,57 @@
-from langgraph.graph import StateGraph, START, END
+from __future__ import annotations
 
+from langgraph.graph import (
+    END,
+    START,
+    StateGraph,
+)
+
+from backend.agents.master_agent import (
+    master_agent,
+)
+from backend.agents.source_manager import (
+    source_manager,
+)
+from backend.core.bootstrap import (
+    build_default_registry,
+)
+from backend.core.registry import (
+    CapabilityNotFoundError,
+)
+from backend.core.task_router import (
+    TaskRouter,
+)
+from backend.rag.source_retrieval import (
+    retrieve_source,
+)
 from backend.state import TCOState
 
-from backend.agents.master_agent import master_agent
-from backend.agents.source_manager import source_manager
-from backend.agents.assessment_agent import assessment_agent
 
-from backend.rag.source_retrieval import retrieve_source
+# ============================================================
+# LAZY TASK ROUTER
+# ============================================================
+
+_task_router: TaskRouter | None = None
+
+
+def _get_task_router() -> TaskRouter:
+    global _task_router
+
+    if _task_router is None:
+        _task_router = TaskRouter(
+            build_default_registry()
+        )
+
+    return _task_router
 
 
 # ============================================================
-# Ask Teacher Node
+# ASK TEACHER
 # ============================================================
 
-def ask_teacher(state: TCOState) -> TCOState:
-    """
-    Ask the teacher for missing information or required approval.
-    """
+def ask_teacher(
+    state: TCOState,
+) -> TCOState:
 
     message = state.get(
         "clarification_message",
@@ -33,70 +68,166 @@ def ask_teacher(state: TCOState) -> TCOState:
 
 
 # ============================================================
-# Evaluation Placeholder
+# GENERIC TASK EXECUTION
+# ============================================================
+
+def execute_task(
+    state: TCOState,
+) -> TCOState:
+    """
+    Execute the Task previously created by the Master Agent.
+
+    The Graph does not know specialist implementations.
+    It simply routes the Task through the registry.
+    """
+
+    task = state.get(
+        "current_task"
+    )
+
+    if task is None:
+        return {
+            **state,
+            "status": "error",
+            "error_code": (
+                "CURRENT_TASK_MISSING"
+            ),
+            "error_message": (
+                "Master Agent did not create a task."
+            ),
+            "next_action": "end",
+        }
+
+    try:
+        provider, routed_task = (
+            _get_task_router().route(task)
+        )
+
+    except CapabilityNotFoundError as exc:
+        return {
+            **state,
+            "status": "error",
+            "error_code": (
+                "TASK_EXECUTION_ROUTING_FAILED"
+            ),
+            "error_message": str(exc),
+            "next_action": "end",
+        }
+
+    print(
+        "\nExecuting task:"
+        f" {routed_task.capability}"
+    )
+
+    print(
+        "Provider:"
+        f" {provider.name}"
+    )
+
+    updated_state = {
+        **state,
+        "current_task": routed_task,
+        "status": "task_executing",
+        "metadata": {
+            **state.get(
+                "metadata",
+                {},
+            ),
+            "executing_provider": (
+                provider.name
+            ),
+            "executing_capability": (
+                routed_task.capability
+            ),
+        },
+    }
+
+    try:
+        result_state = provider.run(
+            updated_state,
+            routed_task,
+        )
+
+    except Exception as exc:
+        return {
+            **updated_state,
+            "status": "error",
+            "error_code": (
+                "TASK_EXECUTION_FAILED"
+            ),
+            "error_message": str(exc),
+            "next_action": "end",
+        }
+
+    return result_state
+
+
+# ============================================================
+# EVALUATION PLACEHOLDER
 # ============================================================
 
 def evaluation_placeholder(
     state: TCOState,
 ) -> TCOState:
 
-    print("\nRouting to Evaluation Agent...")
+    print(
+        "\nEvaluation capability reached."
+    )
 
     return {
         **state,
-        "status": "evaluation_agent_called",
+        "status": (
+            "evaluation_agent_called"
+        ),
     }
 
 
 # ============================================================
-# Master Agent Router
+# MASTER ROUTER
 # ============================================================
 
-def route_after_master(state: TCOState) -> str:
+def route_after_master(
+    state: TCOState,
+) -> str:
 
-    next_action = state.get("next_action")
+    next_action = state.get(
+        "next_action"
+    )
 
     # --------------------------------------------------------
-    # Missing information
+    # Ask teacher
     # --------------------------------------------------------
 
     if next_action == "ask_teacher":
         return "ask_teacher"
 
     # --------------------------------------------------------
-    # Assessment
+    # Knowledge required
     # --------------------------------------------------------
 
-    if next_action == "assessment":
-
-        generation_mode = state.get(
-            "generation_mode",
-            "source_grounded",
-        )
-
-        # Teacher explicitly allowed AI generation.
-        if generation_mode == "llm_generated":
-            return "assessment"
-
-        # Otherwise retrieve approved material first.
+    if next_action == "retrieve_source":
         return "retrieve_source"
 
     # --------------------------------------------------------
-    # Evaluation
+    # Generic specialist/tool task
     # --------------------------------------------------------
 
-    if next_action == "evaluation":
-        return "evaluation"
+    if next_action in {
+        "execute_task",
+        "assessment",
+        "evaluation",
+    }:
+        return "execute_task"
 
     # --------------------------------------------------------
-    # Other intents
+    # Errors / unknown
     # --------------------------------------------------------
 
     return "end"
 
 
 # ============================================================
-# Source Manager Router
+# SOURCE MANAGER ROUTER
 # ============================================================
 
 def route_after_source_check(
@@ -107,31 +238,40 @@ def route_after_source_check(
         "source_status"
     )
 
-    # Approved source found
+    # Source successfully retrieved.
     if source_status == "source_ready":
-        return "assessment"
+        return "execute_task"
 
-    # Reference questions available
-    if source_status == "reference_questions_available":
-        return "assessment"
+    # Existing reference questions can also
+    # continue directly to the specialist.
+    if (
+        source_status
+        == "reference_questions_available"
+    ):
+        return "execute_task"
 
-    # Teacher explicitly allowed AI generation
-    if source_status == "llm_generation_allowed":
-        return "assessment"
+    # Explicit AI-generation permission.
+    if (
+        source_status
+        == "llm_generation_allowed"
+    ):
+        return "execute_task"
 
-    # No source
+    # Anything else requires teacher intervention.
     return "ask_teacher"
 
 
 # ============================================================
-# Build Graph
+# BUILD GRAPH
 # ============================================================
 
-graph = StateGraph(TCOState)
+graph = StateGraph(
+    TCOState
+)
 
 
 # ============================================================
-# Add Nodes
+# NODES
 # ============================================================
 
 graph.add_node(
@@ -150,18 +290,13 @@ graph.add_node(
 )
 
 graph.add_node(
-    "assessment",
-    assessment_agent,
+    "execute_task",
+    execute_task,
 )
 
 graph.add_node(
     "ask_teacher",
     ask_teacher,
-)
-
-graph.add_node(
-    "evaluation",
-    evaluation_placeholder,
 )
 
 
@@ -176,7 +311,7 @@ graph.add_edge(
 
 
 # ============================================================
-# Master Agent Routing
+# MASTER ROUTING
 # ============================================================
 
 graph.add_conditional_edges(
@@ -184,16 +319,17 @@ graph.add_conditional_edges(
     route_after_master,
     {
         "ask_teacher": "ask_teacher",
-        "retrieve_source": "retrieve_source",
-        "assessment": "assessment",
-        "evaluation": "evaluation",
+        "retrieve_source": (
+            "retrieve_source"
+        ),
+        "execute_task": "execute_task",
         "end": END,
     },
 )
 
 
 # ============================================================
-# RAG Retrieval → Source Manager
+# CLASSROOM / RAG
 # ============================================================
 
 graph.add_edge(
@@ -203,25 +339,25 @@ graph.add_edge(
 
 
 # ============================================================
-# Source Manager Routing
+# SOURCE MANAGER ROUTING
 # ============================================================
 
 graph.add_conditional_edges(
     "source_check",
     route_after_source_check,
     {
-        "assessment": "assessment",
+        "execute_task": "execute_task",
         "ask_teacher": "ask_teacher",
     },
 )
 
 
 # ============================================================
-# Temporary Endpoints
+# ENDPOINTS
 # ============================================================
 
 graph.add_edge(
-    "assessment",
+    "execute_task",
     END,
 )
 
@@ -230,14 +366,9 @@ graph.add_edge(
     END,
 )
 
-graph.add_edge(
-    "evaluation",
-    END,
-)
-
 
 # ============================================================
-# Compile
+# COMPILE
 # ============================================================
 
 workflow = graph.compile()
