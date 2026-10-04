@@ -266,6 +266,29 @@ teacher_id = {state.get("teacher_id", "")}
 school_id = {state.get("school_id", "")}
 conversation_id = {state.get("conversation_id", "")}
 
+STRUCTURED TEACHER INPUT:
+intent = {state.get("intent", "")}
+required_capability = {state.get("required_capability", "")}
+class_level = {state.get("class_level", "")}
+subject = {state.get("subject", "")}
+chapter = {state.get("chapter", "")}
+topic = {state.get("topic", "")}
+question_count = {state.get("question_count", "")}
+marks = {state.get("marks", "")}
+generation_mode = {state.get("generation_mode", "")}
+source_preference = {state.get("source_preference", "")}
+requested_source = {state.get("requested_source", "")}
+source_url = {state.get("source_url", "")}
+uploaded_file_name = {state.get("uploaded_file_name", "")}
+uploaded_file_path = {state.get("uploaded_file_path", "")}
+knowledge_source = {state.get("knowledge_source", "")}
+
+IMPORTANT:
+The structured teacher input above comes from the teacher-facing form.
+Use it as authoritative context when the teacher has already supplied a value.
+Do not mark a mandatory assessment field as missing when it is present in the structured input.
+Do not replace a supplied numeric value with null.
+
 TEACHER REQUEST:
 {teacher_request}
 """
@@ -285,6 +308,85 @@ TEACHER REQUEST:
             }
 
         # =====================================================
+        # NORMALIZE MASTER DECISION WITH STRUCTURED FORM INPUT
+        # =====================================================
+
+        # The teacher-facing UI already collects these fields.
+        # The LLM may omit them from its structured response, especially
+        # when the values are not repeated in the free-text request.
+        # Treat the explicit form values as authoritative fallbacks.
+
+        state_intent = str(
+            state.get("intent", "") or ""
+        ).strip()
+        intent = (
+            decision.intent
+            if decision.intent and decision.intent != "unknown"
+            else state_intent
+        )
+
+        class_level = (
+            decision.class_level
+            or state.get("class_level", "")
+            or ""
+        )
+        subject = (
+            decision.subject
+            or state.get("subject", "")
+            or ""
+        )
+        chapter = (
+            decision.chapter
+            or state.get("chapter", "")
+            or ""
+        )
+        topic = (
+            decision.topic
+            or decision.chapter
+            or state.get("topic", "")
+            or state.get("chapter", "")
+            or ""
+        )
+        student_name = (
+            decision.student_name
+            or state.get("student_name", "")
+            or ""
+        )
+
+        question_count = (
+            decision.question_count
+            if decision.question_count is not None
+            else state.get("question_count")
+        )
+        marks = (
+            decision.marks
+            if decision.marks is not None
+            else state.get("marks")
+        )
+
+        generation_mode = (
+            state.get("generation_mode")
+            if state.get("generation_mode")
+            in {"source_grounded", "llm_generated"}
+            else (decision.generation_mode or "source_grounded")
+        )
+        requested_source = (
+            decision.requested_source
+            or state.get("requested_source", "")
+            or ""
+        )
+        source_preference = (
+            state.get("source_preference")
+            or decision.source_preference
+            or "classroom_first"
+        )
+        source_url = (
+            decision.source_url
+            or state.get("source_url", "")
+            or ""
+        )
+
+        # =====================================================
         # DETERMINISTIC ASSESSMENT VALIDATION
         # =====================================================
 
@@ -292,20 +394,17 @@ TEACHER REQUEST:
             decision.missing_information
         )
 
-        if decision.intent == "assessment":
+        if intent == "assessment":
 
-            if (
-                not decision.topic
-                and not decision.chapter
-            ):
+            if not topic:
                 if "topic" not in missing:
                     missing.append("topic")
 
-            if decision.question_count is None:
+            if question_count is None:
                 if "question_count" not in missing:
                     missing.append("question_count")
 
-            if decision.marks is None:
+            if marks is None:
                 if "marks" not in missing:
                     missing.append("marks")
 
@@ -347,41 +446,29 @@ TEACHER REQUEST:
             )
 
         # =====================================================
-        # MISSING INFORMATION → ASK TEACHER
+        # MISSING INFORMATION â†’ ASK TEACHER
         # =====================================================
 
         if missing:
             return {
                 **state,
 
-                "intent": decision.intent,
+                "intent": intent,
                 "language": decision.language,
 
-                "class_level": decision.class_level,
-                "subject": decision.subject,
-                "chapter": decision.chapter,
-                "topic": (
-                    decision.topic
-                    or decision.chapter
-                    or ""
-                ),
+                "class_level": class_level,
+                "subject": subject,
+                "chapter": chapter,
+                "topic": topic,
 
-                "marks": decision.marks,
-                "question_count": (
-                    decision.question_count
-                ),
+                "marks": marks,
+                "question_count": question_count,
 
-                "generation_mode": (
-                    decision.generation_mode
-                ),
+                "generation_mode": generation_mode,
 
-                "requested_source": (
-                    decision.requested_source
-                ),
+                "requested_source": requested_source,
 
-                "source_preference": (
-                    decision.source_preference
-                ),
+                "source_preference": source_preference,
 
                 "required_capability": None,
                 "next_action": "ask_teacher",
@@ -401,12 +488,13 @@ TEACHER REQUEST:
 
         capability = (
             decision.required_capability
+            or state.get("required_capability")
         )
 
         if not capability:
             return {
                 **state,
-                "intent": decision.intent,
+                "intent": intent,
                 "language": decision.language,
                 "required_capability": None,
                 "next_action": "end",
@@ -445,47 +533,29 @@ TEACHER REQUEST:
             }
 
         # =====================================================
-        # NORMALIZE TOPIC
-        # =====================================================
-
-        topic = (
-            decision.topic
-            or decision.chapter
-            or ""
-        )
-
-        # =====================================================
         # CREATE TASK
         # =====================================================
 
         task_input = {
             "teacher_request": teacher_request,
 
-            "class_level": decision.class_level,
-            "subject": decision.subject,
-            "chapter": decision.chapter,
+            "class_level": class_level,
+            "subject": subject,
+            "chapter": chapter,
             "topic": topic,
 
-            "student_name": decision.student_name,
+            "student_name": student_name,
 
-            "marks": decision.marks,
-            "question_count": (
-                decision.question_count
-            ),
+            "marks": marks,
+            "question_count": question_count,
 
-            "generation_mode": (
-                decision.generation_mode
-            ),
+            "generation_mode": generation_mode,
 
-            "requested_source": (
-                decision.requested_source
-            ),
+            "requested_source": requested_source,
 
-            "source_preference": (
-                decision.source_preference
-            ),
+            "source_preference": source_preference,
 
-            "source_url": decision.source_url,
+            "source_url": source_url,
         }
 
         new_task = Task(
@@ -520,7 +590,7 @@ TEACHER REQUEST:
             return {
                 **state,
 
-                "intent": decision.intent,
+                "intent": intent,
                 "required_capability": capability,
 
                 "next_action": "end",
@@ -538,11 +608,11 @@ TEACHER REQUEST:
         # DETERMINE GRAPH NEXT ACTION
         # =====================================================
 
-        if decision.intent == "assessment":
+        if intent == "assessment":
 
             next_action = (
                 self._assessment_next_action(
-                    decision.generation_mode
+                    generation_mode
                 )
             )
 
@@ -556,39 +626,29 @@ TEACHER REQUEST:
         return {
             **state,
 
-            "intent": decision.intent,
+            "intent": intent,
             "language": decision.language,
 
-            "class_level": decision.class_level,
-            "subject": decision.subject,
-            "chapter": decision.chapter,
+            "class_level": class_level,
+            "subject": subject,
+            "chapter": chapter,
             "topic": topic,
 
-            "student_name": (
-                decision.student_name
-            ),
+            "student_name": student_name,
 
-            "marks": decision.marks,
-            "question_count": (
-                decision.question_count
-            ),
+            "marks": marks,
+            "question_count": question_count,
 
-            "generation_mode": (
-                decision.generation_mode
-            ),
+            "generation_mode": generation_mode,
 
             "source": (
-                decision.source_url
+                source_url
                 or state.get("source", "")
             ),
 
-            "requested_source": (
-                decision.requested_source
-            ),
+            "requested_source": requested_source,
 
-            "source_preference": (
-                decision.source_preference
-            ),
+            "source_preference": source_preference,
 
             "required_capability": capability,
 
