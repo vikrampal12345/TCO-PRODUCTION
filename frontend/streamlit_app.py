@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from datetime import datetime
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import streamlit as st
 
 from backend.core.bootstrap import build_default_registry
+from backend.graph import workflow as master_workflow
 from backend.workflows.assessment_delivery import (
     AssessmentDeliveryWorkflow,
 )
@@ -13,7 +21,7 @@ from backend.workflows.assessment_delivery import (
 
 st.set_page_config(
     page_title="TCO | Teacher Co-Worker",
-    page_icon="🎓",
+    page_icon="ðŸŽ“",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -89,6 +97,8 @@ DEFAULT_STATE: dict[str, Any] = {
     "teacher_request": "",
     "teacher_id": "",
     "school_id": "",
+    "conversation_id": "",
+    "classroom_course_id": "",
     "class_level": "",
     "student_class_level": "",
     "subject": "",
@@ -96,8 +106,8 @@ DEFAULT_STATE: dict[str, Any] = {
     "topic": "",
     "marks": 0,
     "question_count": 0,
-    "generation_mode": "llm_generated",
-    "source_preference": "general_knowledge",
+    "generation_mode": "source_grounded",
+    "source_preference": "classroom_first",
     "requested_source": "",
     "source_url": "",
     "section": "",
@@ -160,6 +170,8 @@ def status_label(status: str) -> str:
     labels = {
         "idle": "Ready",
         "assessment_generation_failed": "Generation failed",
+        "waiting_for_teacher": "Waiting for teacher/source input",
+        "assessment_ready_for_review": "Assessment ready for review",
         "assessment_ready_for_teacher": "Waiting for teacher approval",
         "assessment_approved": "Teacher approved",
         "assessment_form_published": "Google Form published",
@@ -283,7 +295,7 @@ def display_questions(state: dict[str, Any]) -> None:
             )
 
         with st.expander(
-            f"Teacher view — answer for Q{index}",
+            f"Teacher view â€” answer for Q{index}",
             expanded=False,
         ):
             st.write(
@@ -309,11 +321,29 @@ def build_state_from_form(
     question_count: int,
     section: str,
     student_class_level: str,
+    *,
+    mode: str,
+    classroom_course_id: str = "",
 ) -> dict[str, Any]:
+    request_id = (
+        f"streamlit_"
+        f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+    )
+
+    is_work_mode = (
+        mode == "Work Mode — Classroom + RAG"
+    )
+
     return {
-        "request_id": f"streamlit_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+        "request_id": request_id,
+        "conversation_id": request_id,
         "teacher_id": teacher_id,
         "school_id": school_id,
+        "classroom_course_id": (
+            classroom_course_id
+            if is_work_mode
+            else ""
+        ),
         "teacher_request": teacher_request,
         "intent": "assessment",
         "language": "english",
@@ -325,9 +355,17 @@ def build_state_from_form(
         "topic": topic,
         "marks": marks,
         "question_count": question_count,
-        "generation_mode": "llm_generated",
+        "generation_mode": (
+            "source_grounded"
+            if is_work_mode
+            else "llm_generated"
+        ),
         "requested_source": "",
-        "source_preference": "general_knowledge",
+        "source_preference": (
+            "classroom_first"
+            if is_work_mode
+            else "general_knowledge"
+        ),
         "source_url": "",
         "section": section,
         "missing_information": [],
@@ -357,6 +395,32 @@ with st.sidebar:
     st.divider()
     st.subheader("Assessment")
 
+    mode = st.selectbox(
+        "TCO Mode",
+        [
+            "Work Mode — Classroom + RAG",
+            "AI General Knowledge — Test Mode",
+        ],
+        index=0,
+        help=(
+            "Work Mode uses the Master Agent to find relevant "
+            "material in Google Classroom and ground the Assessment Agent "
+            "with RAG. Test Mode generates from general knowledge."
+        ),
+    )
+
+    if mode == "Work Mode — Classroom + RAG":
+        classroom_course_id = st.text_input(
+            "Google Classroom Course ID",
+            value="871538502094",
+            help=(
+                "Course ID used by the connected Google Classroom account. "
+                "For this current test, use 871538502094."
+            ),
+        )
+    else:
+        classroom_course_id = ""
+
     class_level = st.text_input(
         "Assessment Class / Year",
         value="BTech 1st Year",
@@ -377,17 +441,17 @@ with st.sidebar:
 
     subject = st.text_input(
         "Subject",
-        value="Python",
+        value="Computer Organization",
     )
 
     chapter = st.text_input(
         "Chapter",
-        value="Python Basics",
+        value="Unit 2",
     )
 
     topic = st.text_input(
         "Topic",
-        value="Python Basics",
+        value="Booth Algorithm",
     )
 
     question_count = st.number_input(
@@ -402,14 +466,21 @@ with st.sidebar:
         "Total Marks",
         min_value=1,
         max_value=100,
-        value=5,
+        value=20,
         step=1,
     )
 
-    st.caption(
-        "Current workflow mode: AI general knowledge. "
-        "The generated LLM output is passed through as-is."
-    )
+    if mode == "Work Mode — Classroom + RAG":
+        st.caption(
+            "Work Mode: Master Agent → Google Classroom → RAG → "
+            "Assessment Agent. Classroom material is treated as an "
+            "authorized internal source."
+        )
+    else:
+        st.caption(
+            "AI general-knowledge test mode. The generated LLM output "
+            "is passed through as-is."
+        )
 
     st.divider()
 
@@ -426,11 +497,11 @@ with st.sidebar:
 # =========================================================
 
 st.markdown(
-    "<div class='tco-title'>TCO — Teacher Co-Worker</div>",
+    "<div class='tco-title'>TCO â€” Teacher Co-Worker</div>",
     unsafe_allow_html=True,
 )
 st.markdown(
-    "<div class='tco-subtitle'>Create an assessment, approve it, publish it, save it, and deliver it to students — while watching every workflow step.</div>",
+    "<div class='tco-subtitle'>Create an assessment, approve it, publish it, save it, and deliver it to students â€” while watching every workflow step.</div>",
     unsafe_allow_html=True,
 )
 
@@ -460,8 +531,8 @@ with input_tab:
     teacher_request = st.text_area(
         "Teacher request",
         value=(
-            "Create a 5-question, 5-mark MCQ assessment on "
-            "Python basics for BTech 1st Year students."
+            "Create a 5-question, 20 marks assessment on "
+            "Booth Algorithm for Computer Organization Unit 2."
         ),
         height=120,
         help="This request is passed to the Assessment Agent along with the structured fields.",
@@ -502,6 +573,15 @@ with input_tab:
             st.error("Student section is required for delivery.")
             st.stop()
 
+        if (
+            mode == "Work Mode — Classroom + RAG"
+            and not classroom_course_id.strip()
+        ):
+            st.error(
+                "Google Classroom Course ID is required in Work Mode."
+            )
+            st.stop()
+
         state = build_state_from_form(
             teacher_id=teacher_id.strip(),
             school_id=school_id.strip(),
@@ -514,6 +594,12 @@ with input_tab:
             question_count=int(question_count),
             section=section.strip(),
             student_class_level=student_class_level.strip(),
+            mode=mode,
+            classroom_course_id=(
+                classroom_course_id.strip()
+                if mode == "Work Mode — Classroom + RAG"
+                else ""
+            ),
         )
 
         st.session_state.workflow_state = state
@@ -524,13 +610,79 @@ with input_tab:
             f"Request: {teacher_request.strip()}"
         )
         add_log("Routing task to capability: assessment.create")
-        add_log("Calling local LLM through Assessment Agent...")
 
-        workflow = get_workflow()
-
-        with st.spinner("Assessment Agent is generating the assessment..."):
+        with st.spinner("TCO is processing the assessment request..."):
             try:
-                state = workflow.generate_and_review(state)
+                if mode == "Work Mode — Classroom + RAG":
+                    add_log(
+                        "Work Mode enabled: invoking Master Agent."
+                    )
+                    add_log(
+                        "Master Agent will search Google Classroom "
+                        "before assessment generation."
+                    )
+
+                    state = master_workflow.invoke(state)
+
+                    if state.get("status") == (
+                        "assessment_ready_for_review"
+                    ):
+                        state["assessment_review_status"] = "passed"
+                        state["assessment_review_feedback"] = (
+                            "Review bypassed for end-to-end workflow test."
+                        )
+                        state["status"] = (
+                            "assessment_ready_for_teacher"
+                        )
+
+                        add_log(
+                            "Master Agent completed source-grounded routing."
+                        )
+                        add_log(
+                            "Google Classroom material found and retrieved through RAG."
+                        )
+                        add_log(
+                            f"Source approved: "
+                            f"{state.get('source_approved')}"
+                        )
+                        add_log(
+                            "Assessment Agent generated the assessment."
+                        )
+                    elif state.get("status") == "waiting_for_teacher":
+                        clarification = state.get(
+                            "clarification_message"
+                        )
+                        if clarification and not state.get(
+                            "error_message"
+                        ):
+                            state["error_message"] = clarification
+
+                        add_log(
+                            "Work Mode is waiting for teacher/source input."
+                        )
+                    else:
+                        add_log(
+                            "Work Mode did not reach assessment generation."
+                        )
+                else:
+                    add_log(
+                        "AI general-knowledge test mode enabled."
+                    )
+                    add_log(
+                        "Calling local LLM through Assessment Agent..."
+                    )
+
+                    workflow = get_workflow()
+                    state = workflow.generate_and_review(state)
+
+                    add_log(
+                        "Assessment Agent finished generation."
+                    )
+                    add_log(
+                        "Review Agent is bypassed for this workflow test; "
+                        "LLM output is accepted as-is."
+                    )
+
             except Exception as exc:
                 state["status"] = "assessment_generation_failed"
                 state["error_message"] = str(exc)
@@ -538,11 +690,9 @@ with input_tab:
                     f"Assessment generation failed: {exc}"
                 )
             else:
-                add_log("Assessment Agent finished generation.")
-                add_log(
-                    "Review Agent is bypassed for this workflow test; LLM output is accepted as-is."
-                )
-                if state.get("status") == "assessment_ready_for_teacher":
+                if state.get("status") == (
+                    "assessment_ready_for_teacher"
+                ):
                     add_log(
                         "Assessment is waiting for teacher approval."
                     )
@@ -678,8 +828,23 @@ with process_tab:
             state.get("status") != "idle",
         ),
         (
+            "Master / Source Routing",
+            (
+                "Work Mode: Master Agent selected the capability, "
+                "found Classroom material, and retrieved grounded context."
+                if state.get("generation_mode") == "source_grounded"
+                else
+                "Test Mode: source routing is intentionally bypassed."
+            ),
+            (
+                bool(state.get("retrieved_context"))
+                if state.get("generation_mode") == "source_grounded"
+                else True
+            ),
+        ),
+        (
             "Assessment Agent",
-            "Task routed through capability assessment.create and local LLM generated the MCQs.",
+            "Task routed through capability assessment.create and the Assessment Agent generated the MCQs.",
             bool(state.get("questions")),
         ),
         (
@@ -713,9 +878,9 @@ with process_tab:
 
     for title, description, complete in stages:
         if complete:
-            st.success(f"✓ {title}")
+            st.success(f"âœ“ {title}")
         else:
-            st.info(f"○ {title}")
+            st.info(f"â—‹ {title}")
         st.caption(description)
 
     st.divider()
@@ -733,6 +898,31 @@ with result_tab:
 
     if state.get("questions"):
         display_questions(state)
+
+    if state.get("generation_mode") == "source_grounded":
+        st.divider()
+        st.subheader("Knowledge Source")
+
+        source_cols = st.columns(4)
+        source_cols[0].write(
+            f"**Source status:** `{state.get('source_status', '')}`"
+        )
+        source_cols[1].write(
+            f"**Source approved:** `{state.get('source_approved', False)}`"
+        )
+        source_cols[2].write(
+            f"**Classroom material:** `{state.get('classroom_material_id', '')}`"
+        )
+        source_cols[3].write(
+            f"**Attachment:** `{state.get('classroom_attachment_title', '')}`"
+        )
+
+        if state.get("retrieved_context"):
+            with st.expander(
+                "Retrieved Classroom context",
+                expanded=False,
+            ):
+                st.text(state.get("retrieved_context", ""))
 
     if state.get("form_id"):
         st.divider()

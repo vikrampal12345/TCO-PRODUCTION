@@ -161,3 +161,14 @@ checkpoints/
 generated/
 outputs/
 artifacts/
+# Google Forms OAuth token
+forms_token.json
+
+# Classroom downloaded/cache data
+data/classroom_cache/
+
+# Google Forms OAuth token
+forms_token.json
+
+# Classroom downloaded/cache data
+data/classroom_cache/
