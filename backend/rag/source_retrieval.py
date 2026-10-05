@@ -18,6 +18,11 @@ from backend.services.file_ingestion import (
     FileIngestionError,
     TeacherFileIngestionService,
 )
+from backend.services.source_discovery import SourceDiscoveryService
+from backend.services.web_source_ingestion import (
+    WebSourceIngestionError,
+    WebSourceIngestionService,
+)
 
 
 DEFAULT_TOP_K = 5
@@ -548,6 +553,285 @@ def _retrieve_teacher_file(
         },
     }
 
+
+def _retrieve_web_source(
+    state: dict[str, Any],
+    *,
+    topic: str,
+    teacher_id: str,
+    school_id: str,
+    conversation_id: str,
+) -> dict[str, Any]:
+    """
+    Retrieve context from the explicit Web Search + RAG mode.
+
+    First pass:
+        search -> return unapproved candidates -> wait for teacher
+
+    Approved pass:
+        approved candidate -> Tavily Extract -> common RAG -> context
+    """
+
+    source_approved = state.get("source_approved") is True
+    candidates = state.get("source_candidates") or []
+    selected_source = dict(state.get("selected_source") or {})
+
+    # ---------------------------------------------------------
+    # 1. DISCOVER CANDIDATES
+    # ---------------------------------------------------------
+    if not source_approved:
+        if not candidates:
+            discovery_service = SourceDiscoveryService()
+
+            result = discovery_service.discover(state)
+
+            if not result.success:
+                return {
+                    **state,
+                    "knowledge_source": "web_search",
+                    "source_available": False,
+                    "source_status": "web_source_discovery_failed",
+                    "source_approved": False,
+                    "approval_required": True,
+                    "approval_type": "source",
+                    "approval_status": "pending",
+                    "retrieved_context": "",
+                    "source_references": [],
+                    "next_action": "ask_teacher",
+                    "status": "source_discovery_failed",
+                    "error_code": result.error_code or "WEB_SOURCE_DISCOVERY_FAILED",
+                    "error_message": result.error_message or "Web source discovery failed.",
+                    "clarification_message": (
+                        "TCO could not find suitable web sources for this assessment."
+                    ),
+                }
+
+            discovered = result.data or []
+            candidates = [
+                item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                for item in discovered
+            ]
+
+        if not candidates:
+            return {
+                **state,
+                "knowledge_source": "web_search",
+                "source_available": False,
+                "source_status": "web_source_not_found",
+                "source_approved": False,
+                "approval_required": True,
+                "approval_type": "source",
+                "approval_status": "pending",
+                "source_candidates": [],
+                "retrieved_context": "",
+                "source_references": [],
+                "next_action": "ask_teacher",
+                "status": "source_not_found",
+                "clarification_message": (
+                    "No suitable web source was found. Please change the topic or try again."
+                ),
+            }
+
+        return {
+            **state,
+            "knowledge_source": "web_search",
+            "source": "",
+            "source_available": False,
+            "source_status": "web_source_candidates_available",
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "source_candidates": candidates,
+            "selected_source": selected_source,
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "waiting_for_teacher",
+            "clarification_message": (
+                "I found web sources for this assessment. Select and approve one source to continue."
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # 2. VALIDATE APPROVED SOURCE
+    # ---------------------------------------------------------
+    selected_url = str(
+        selected_source.get("url")
+        or state.get("source_url")
+        or ""
+    ).strip()
+
+    if not selected_url:
+        return {
+            **state,
+            "knowledge_source": "web_search",
+            "source_available": False,
+            "source_status": "web_source_approval_incomplete",
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "next_action": "ask_teacher",
+            "status": "waiting_for_teacher",
+            "error_code": "WEB_SOURCE_URL_MISSING",
+            "clarification_message": (
+                "A web source was approved, but its URL is missing. Please select a candidate again."
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # 3. FETCH + INDEX APPROVED SOURCE
+    # ---------------------------------------------------------
+    ingestion_result = None
+    source_path = str(
+        state.get("web_source_content_path", "") or ""
+    ).strip()
+
+    try:
+        ingestion_service = WebSourceIngestionService()
+
+        ingestion_result = ingestion_service.ingest(
+            state,
+            selected_source=selected_source,
+        )
+
+        source_path = str(
+            ingestion_result.get("file_path", source_path) or source_path
+        ).strip()
+
+    except WebSourceIngestionError as exc:
+        return {
+            **state,
+            "knowledge_source": "web_search",
+            "source_available": False,
+            "source_status": "web_source_ingestion_failed",
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "source_ingestion_failed",
+            "error_code": "WEB_SOURCE_INGESTION_FAILED",
+            "error_message": str(exc),
+            "clarification_message": (
+                "TCO could not fetch or index the approved web source. Please approve another candidate."
+            ),
+        }
+
+    source_id = str(
+        (ingestion_result or {}).get("source_id", "") or ""
+    ).strip()
+
+    if not source_path or not source_id:
+        return {
+            **state,
+            "knowledge_source": "web_search",
+            "source_available": False,
+            "source_status": "web_source_ingestion_incomplete",
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "source_ingestion_failed",
+            "error_code": "WEB_SOURCE_METADATA_MISSING",
+            "clarification_message": (
+                "The approved web source was fetched, but TCO could not identify its RAG source."
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # 4. RAG RETRIEVAL
+    # ---------------------------------------------------------
+    rag_query = _build_rag_query(state) or topic
+
+    try:
+        context = retrieve_source_context(
+            query=rag_query,
+            source=source_path,
+            top_k=DEFAULT_TOP_K,
+            similarity_threshold=DEFAULT_SIMILARITY_THRESHOLD,
+        )
+    except Exception as exc:
+        return {
+            **state,
+            "knowledge_source": "web_search",
+            "source": source_id,
+            "source_available": False,
+            "source_status": "web_source_rag_failed",
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "source_rag_failed",
+            "error_code": "WEB_SOURCE_RAG_RETRIEVAL_FAILED",
+            "error_message": str(exc),
+            "clarification_message": (
+                "The approved web source was indexed, but RAG retrieval failed."
+            ),
+        }
+
+    if not context:
+        return {
+            **state,
+            "knowledge_source": "web_search",
+            "source": source_id,
+            "source_available": False,
+            "source_status": "no_relevant_web_source_context",
+            "source_approved": False,
+            "approval_required": True,
+            "approval_type": "source",
+            "approval_status": "pending",
+            "retrieved_context": "",
+            "source_references": [],
+            "next_action": "ask_teacher",
+            "status": "source_not_found",
+            "clarification_message": (
+                f"The approved source did not contain relevant content for '{topic}'. Please approve another source."
+            ),
+        }
+
+    return {
+        **state,
+        "knowledge_source": "web_search",
+        "source": source_id,
+        "source_url": selected_url,
+        "source_available": True,
+        "source_status": "source_ready",
+        "source_approved": True,
+        "approval_required": False,
+        "approval_type": "source",
+        "approval_status": "approved",
+        "selected_source": {
+            **selected_source,
+            "approved": True,
+        },
+        "retrieved_context": context,
+        "source_references": [source_id],
+        "web_source_fetched": True,
+        "web_source_content_path": source_path,
+        "next_action": "execute_task",
+        "status": "source_retrieved",
+        "metadata": {
+            **state.get("metadata", {}),
+            "knowledge_source": "web_search",
+            "web_source_url": selected_url,
+            "web_source_title": str(selected_source.get("title", "") or ""),
+            "web_source_domain": str(selected_source.get("domain", "") or ""),
+            "web_source_source_id": source_id,
+            "web_source_content_path": source_path,
+            "ingestion_result": ingestion_result,
+        },
+    }
+
 def retrieve_source(
     state: dict[str, Any],
 ) -> dict[str, Any]:
@@ -669,6 +953,17 @@ def retrieve_source(
     knowledge_source = str(
         state.get("knowledge_source", "") or ""
     ).strip()
+
+    # Explicit Web Search Mode is source-isolated.
+    # Never fall through to Google Classroom.
+    if source_preference == "web_search_only" or knowledge_source == "web_search":
+        return _retrieve_web_source(
+            state,
+            topic=topic,
+            teacher_id=teacher_id,
+            school_id=school_id,
+            conversation_id=conversation_id,
+        )
 
     # Teacher File Mode is deliberately source-isolated.
     # Do not initialize Classroom discovery at all.

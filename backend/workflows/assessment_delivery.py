@@ -73,6 +73,18 @@ class AssessmentDeliveryWorkflow:
                     "general_knowledge",
                 ),
                 "source_url": state.get("source_url", ""),
+                # Common RAG contract: the specialist agent receives the
+                # retrieved context and source references regardless of
+                # whether the source came from Teacher File, Classroom,
+                # or approved Web Search.
+                "retrieved_context": state.get(
+                    "retrieved_context",
+                    "",
+                ),
+                "source_references": state.get(
+                    "source_references",
+                    [],
+                ),
             },
             metadata={
                 "workflow": "assessment_delivery",
