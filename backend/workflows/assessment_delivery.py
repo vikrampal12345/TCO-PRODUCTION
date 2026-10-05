@@ -41,6 +41,7 @@ class AssessmentDeliveryWorkflow:
     def generate_and_review(
         self,
         state: dict[str, Any],
+        task: Task | None = None,
     ) -> dict[str, Any]:
         """
         Generate the assessment using the Assessment Agent.
@@ -53,52 +54,81 @@ class AssessmentDeliveryWorkflow:
         state["assessment_review_attempts"] = 1
         state["assessment_max_review_attempts"] = self.max_review_attempts
         print("\n--- Assessment Generation ---")
-        assessment_task = Task(
-            capability="assessment.create",
-            input_data={
-                "teacher_request": state.get("teacher_request", ""),
-                "class_level": state.get("class_level", ""),
-                "subject": state.get("subject", ""),
-                "chapter": state.get("chapter", ""),
-                "topic": state.get("topic", ""),
-                "marks": state.get("marks", 0),
-                "question_count": state.get("question_count", 0),
-                "generation_mode": state.get(
-                    "generation_mode",
-                    "llm_generated",
-                ),
-                "requested_source": state.get("requested_source", ""),
-                "source_preference": state.get(
-                    "source_preference",
-                    "general_knowledge",
-                ),
-                "source_url": state.get("source_url", ""),
-                # Common RAG contract: the specialist agent receives the
-                # retrieved context and source references regardless of
-                # whether the source came from Teacher File, Classroom,
-                # or approved Web Search.
-                "retrieved_context": state.get(
-                    "retrieved_context",
-                    "",
-                ),
-                "source_references": state.get(
-                    "source_references",
-                    [],
-                ),
-            },
-            metadata={
-                "workflow": "assessment_delivery",
-                "review_bypassed": True,
-            },
-        )
-        assessment_provider, assessment_task = self.router.route(
-            assessment_task
-        )
+        # =========================================================
+        # ASSESSMENT TASK
+        # =========================================================
+
+        if task is None:
+            # Backward-compatible path. If no task was supplied by the
+            # Master Agent, the workflow creates and routes the task itself.
+            assessment_task = Task(
+                capability="assessment.create",
+                input_data={
+                    "teacher_request": state.get("teacher_request", ""),
+                    "class_level": state.get("class_level", ""),
+                    "subject": state.get("subject", ""),
+                    "chapter": state.get("chapter", ""),
+                    "topic": state.get("topic", ""),
+                    "marks": state.get("marks", 0),
+                    "question_count": state.get("question_count", 0),
+                    "generation_mode": state.get(
+                        "generation_mode",
+                        "llm_generated",
+                    ),
+                    "requested_source": state.get(
+                        "requested_source",
+                        "",
+                    ),
+                    "source_preference": state.get(
+                        "source_preference",
+                        "general_knowledge",
+                    ),
+                    "source_url": state.get(
+                        "source_url",
+                        "",
+                    ),
+                },
+                metadata={
+                    "workflow": "assessment_delivery",
+                    "review_bypassed": True,
+                },
+            )
+
+            assessment_provider, assessment_task = self.router.route(
+                assessment_task
+            )
+
+        else:
+            # Master Agent has already created and routed the task.
+            assessment_task = task
+
+            if assessment_task.capability != "assessment.create":
+                state["status"] = "assessment_generation_failed"
+                state["error_message"] = (
+                    "Invalid task capability for assessment workflow: "
+                    f"{assessment_task.capability}"
+                )
+                return state
+
+            try:
+                assessment_provider = self.registry.get_agent(
+                    assessment_task.capability
+                )
+            except Exception as exc:
+                state["status"] = "assessment_generation_failed"
+                state["error_message"] = (
+                    "Could not resolve the Assessment Agent for "
+                    f"capability '{assessment_task.capability}': {exc}"
+                )
+                return state
+
         state["current_task"] = assessment_task
+
         state = assessment_provider.run(
             state,
             assessment_task,
         )
+
         if state.get("status") != "assessment_ready_for_review":
             state["status"] = "assessment_generation_failed"
             return state
@@ -313,6 +343,88 @@ class AssessmentDeliveryWorkflow:
                 False,
             )
         )
+
+        # -----------------------------------------------------
+        # Add deterministic student identity field
+        # -----------------------------------------------------
+        # The identity field must be part of every TCO assessment
+        # form so that submitted responses can be mapped to a
+        # database student without guessing. The identity tool is
+        # idempotent, so calling it is safe even if a form already
+        # contains the field.
+        try:
+            identity_tool = self.registry.get_tool(
+                "form.identity.add"
+            )
+        except Exception as exc:
+            state["status"] = "form_identity_setup_failed"
+            state["error_code"] = "IDENTITY_TOOL_NOT_REGISTERED"
+            state["error_message"] = (
+                "Google Forms identity tool is not registered: "
+                f"{exc}"
+            )
+            return state
+
+        identity_result = identity_tool.execute(
+            operation="form.identity.add",
+            form_id=state.get("form_id", ""),
+            required=True,
+        )
+
+        if not identity_result.success:
+            state["status"] = "form_identity_setup_failed"
+            state["error_code"] = (
+                identity_result.error_code
+                or "IDENTITY_FIELD_ADD_FAILED"
+            )
+            state["error_message"] = (
+                identity_result.error_message
+                or "Could not add Student ID / Roll Number field."
+            )
+            return state
+        identity_data = identity_result.data or {}
+
+        state["identity_field"] = identity_data.get(
+            "identity_field",
+            {},
+        )
+
+        state["identity_fields"] = identity_data.get(
+            "identity_fields",
+            [],
+        )
+
+        state["identity_field_count"] = identity_data.get(
+            "identity_field_count",
+            len(state["identity_fields"]),
+        )
+
+        state["identity_fields_added"] = identity_data.get(
+            "identity_fields_added",
+            [],
+        )
+
+        state["identity_fields_added_count"] = identity_data.get(
+            "identity_fields_added_count",
+            len(state["identity_fields_added"]),
+        )
+
+        state["identity_field_added"] = identity_data.get(
+            "identity_field_added",
+            False,
+        )
+
+        state["identity_field_title"] = (
+            "Student ID / Roll Number"
+        )
+
+        state["identity_field_titles"] = [
+            field.get("title")
+            for field in state["identity_fields"]
+            if field.get("title")
+        ]
+                
+
         state["status"] = (
             "assessment_form_published"
         )

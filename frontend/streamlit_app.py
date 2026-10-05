@@ -37,6 +37,13 @@ from backend.graph import workflow as master_workflow
 from backend.rag.source_retrieval import retrieve_source
 
 from backend.services.source_approval import approve_source
+from backend.agents.evaluation_agent import EvaluationAgent
+from backend.services.assessment_result_lifecycle import AssessmentResultLifecycleService
+from backend.services.assessment_result_service import AssessmentResultService
+from backend.services.evaluation_cycle import EvaluationCycleService
+from backend.services.result_email_service import ResultEmailService
+from backend.services.result_store import ResultStore
+from backend.tools.gmail import GmailTool
 
 from backend.workflows.assessment_delivery import (
 
@@ -234,6 +241,14 @@ if "workflow" not in st.session_state:
 
     st.session_state.workflow = None
 
+if "evaluation_results" not in st.session_state:
+
+    st.session_state.evaluation_results = []
+
+if "result_email_summary" not in st.session_state:
+
+    st.session_state.result_email_summary = None
+
 # =========================================================
 
 # HELPERS
@@ -285,6 +300,8 @@ def reset_workflow() -> None:
     st.session_state.workflow_state = DEFAULT_STATE.copy()
 
     st.session_state.logs = []
+    st.session_state.evaluation_results = []
+    st.session_state.result_email_summary = None
 
     if "web_source_choice" in st.session_state:
 
@@ -719,6 +736,183 @@ def build_state_from_form(
         "status": "starting",
 
     }
+
+# =========================================================
+# RESULT / EVALUATION SERVICES
+# =========================================================
+
+def get_result_lifecycle_services():
+    result_store = ResultStore()
+    result_service = AssessmentResultService(
+        result_store=result_store,
+    )
+    evaluation_cycle = EvaluationCycleService(
+        evaluation_agent=EvaluationAgent(),
+        result_service=result_service,
+    )
+    gmail_tool = GmailTool()
+    result_email_service = ResultEmailService(
+        result_store=result_store,
+        gmail_tool=gmail_tool,
+    )
+    lifecycle_service = AssessmentResultLifecycleService(
+        evaluation_cycle=evaluation_cycle,
+        result_email_service=result_email_service,
+    )
+    return result_store, lifecycle_service, result_email_service
+
+
+def evaluate_current_assessment():
+    state = st.session_state.workflow_state
+    form_id = str(state.get("form_id", "") or "").strip()
+    assessment_id = state.get("assessment_id")
+    if not form_id:
+        raise ValueError("Google Form ID is missing.")
+    if assessment_id is None:
+        raise ValueError("Assessment ID is missing.")
+    _, lifecycle_service, _ = get_result_lifecycle_services()
+    results = lifecycle_service.process_form(
+        form_id=form_id,
+        assessment_id=int(assessment_id),
+        school_id=state.get("school_id") or None,
+        class_level=state.get("student_class_level") or None,
+        section=state.get("section") or None,
+        send_email=False,
+    )
+    st.session_state.evaluation_results = results
+    st.session_state.result_email_summary = None
+
+
+def show_evaluation_dashboard(state: dict[str, Any]) -> None:
+    assessment_id = state.get("assessment_id")
+    form_id = str(state.get("form_id", "") or "").strip()
+    if not assessment_id or not form_id:
+        return
+
+    st.divider()
+    st.subheader("Evaluation & Results")
+    st.caption(
+        "Evaluate and save results first. Result emails are sent only after teacher approval."
+    )
+
+    if st.button(
+        "Evaluate Student Responses",
+        type="primary",
+        use_container_width=True,
+        key="evaluate_student_responses",
+    ):
+        add_log("Master Agent reached the evaluation stage.")
+        add_log("Evaluation Agent is processing Google Form responses.")
+        with st.spinner("Evaluating responses and saving results..."):
+            try:
+                evaluate_current_assessment()
+                add_log(
+                    f"Evaluation completed for assessment {assessment_id}."
+                )
+            except Exception as exc:
+                st.error(f"Evaluation failed: {exc}")
+                add_log(f"Evaluation failed: {exc}")
+
+    results = st.session_state.evaluation_results
+    if not results:
+        st.info(
+            "No evaluated responses loaded yet. Students must submit the Google Form first."
+        )
+        return
+
+    rows = []
+    review_count = 0
+    for item in results:
+        if item.get("status") == "review_required":
+            review_count += 1
+            continue
+        evaluation = item.get("evaluation_result") or item.get("evaluation") or {}
+        saved = item.get("saved_result") or {}
+        rows.append({
+            "Result ID": saved.get("result_id"),
+            "Student": saved.get("student_name") or evaluation.get("student_name") or "Unknown",
+            "Email": saved.get("student_email") or "",
+            "Marks": f"{evaluation.get('obtained_marks', saved.get('obtained_marks', 0))} / {evaluation.get('total_marks', saved.get('total_marks', 0))}",
+            "Percentage": evaluation.get("percentage", saved.get("percentage", 0)),
+            "Correct": evaluation.get("correct_answers", saved.get("correct_answers", 0)),
+            "Wrong": evaluation.get("wrong_answers", saved.get("wrong_answers", 0)),
+            "Unanswered": evaluation.get("unanswered", saved.get("unanswered", 0)),
+            "Email": saved.get("result_email_status", "not_sent"),
+        })
+
+    metrics = st.columns(4)
+    metrics[0].metric("Responses", len(results))
+    metrics[1].metric("Saved Results", len(rows))
+    metrics[2].metric("Review Required", review_count)
+    metrics[3].metric(
+        "Average %",
+        round(sum(float(r["Percentage"] or 0) for r in rows) / len(rows), 2) if rows else 0,
+    )
+
+    if rows:
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Result Email")
+        st.warning(
+            "The next action sends real Gmail messages to saved results whose email status is not_sent."
+        )
+        if st.button(
+            "Send Result Emails",
+            type="primary",
+            use_container_width=True,
+            key="send_result_emails",
+        ):
+            add_log("Teacher approved result-email delivery.")
+            with st.spinner("Sending result emails through Gmail..."):
+                try:
+                    _, _, email_service = get_result_lifecycle_services()
+                    summary = email_service.send_pending_results(
+                        assessment_id=int(assessment_id),
+                    )
+                    st.session_state.result_email_summary = summary
+                    add_log(
+                        f"Result email delivery: {summary.get('sent', 0)} sent, "
+                        f"{summary.get('failed', 0)} failed, "
+                        f"{summary.get('skipped', 0)} skipped."
+                    )
+                except Exception as exc:
+                    st.session_state.result_email_summary = {
+                        "status": "failed",
+                        "error": str(exc),
+                    }
+                    add_log(f"Result email delivery failed: {exc}")
+
+    if review_count:
+        st.warning(f"{review_count} response(s) require review and were not finalized.")
+
+    summary = st.session_state.result_email_summary
+    if summary:
+        st.divider()
+        st.subheader("Result Email Status")
+        if summary.get("status") == "failed":
+            st.error(summary.get("error", "Result email delivery failed."))
+        else:
+            cols = st.columns(4)
+            cols[0].metric("Processed", summary.get("total", 0))
+            cols[1].metric("Sent", summary.get("sent", 0))
+            cols[2].metric("Failed", summary.get("failed", 0))
+            cols[3].metric("Skipped", summary.get("skipped", 0))
+            if summary.get("results"):
+                st.dataframe(
+                    [
+                        {
+                            "Result ID": x.get("result_id"),
+                            "Recipient": x.get("recipient"),
+                            "Status": x.get("status"),
+                            "Error": x.get("error", ""),
+                        }
+                        for x in summary["results"]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
 
 # SIDEBAR
 
@@ -2615,5 +2809,7 @@ with result_tab:
             state.get("student_email_failed", 0),
 
         )
+
+    show_evaluation_dashboard(state)
 
     show_error(state)
