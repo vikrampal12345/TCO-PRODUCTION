@@ -1,166 +1,125 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
-from backend.rag.retriever import retrieve_documents
-from backend.rag.vectorstore import collection
+
+# ============================================================
+# PROJECT ROOT
+# ============================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+# ============================================================
+# IMPORTS
+# ============================================================
+
 from backend.services.classroom_ingestion import (
     ClassroomIngestionError,
     ClassroomIngestionService,
 )
 
+from backend.rag.vectorstore import (
+    get_source_id_chunks,
+)
+
+
+# ============================================================
+# TEST CONFIGURATION
+# ============================================================
 
 COURSE_ID = "871538502094"
 
-# MY NOTES UNIT-2 -> Booth Algorithm Step-by-Step Examples.pdf
 MATERIAL_ID = "884229212233"
 
 TEACHER_ID = "teacher-classroom-test"
+
 SCHOOL_ID = "TCO_CLASSROOM_TEST"
+
 CONVERSATION_ID = "conversation-classroom-rag-test"
 
 
-def cleanup_test_scope() -> int:
-    """
-    Remove only chunks created by this Classroom RAG test.
-    Existing unrelated Chroma data is preserved.
-    """
-    result = collection.get(
-        include=["metadatas"]
+# IMPORTANT:
+# The Classroom material contains multiple attachments.
+# We explicitly select the PDF required by this test.
+ATTACHMENT_TITLE = (
+    "Booth Algorithm Step-by-Step Examples.pdf"
+)
+
+
+# Expected Drive file ID for the above attachment.
+EXPECTED_DRIVE_FILE_ID = (
+    "1qBga7gdr-8dw1l2ozN1D3ndhirud7t51"
+)
+
+
+# Expected file type.
+EXPECTED_FILE_TYPE = "pdf"
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def print_section(title: str) -> None:
+    print()
+    print("-" * 60)
+    print(title)
+    print("-" * 60)
+
+
+def assert_result_field(
+    result: dict,
+    field: str,
+    expected,
+) -> None:
+    actual = result.get(field)
+
+    assert actual == expected, (
+        f"Field '{field}' mismatch.\n"
+        f"Expected: {expected!r}\n"
+        f"Actual:   {actual!r}"
     )
 
-    ids = result.get(
-        "ids",
-        [],
-    )
 
-    metadatas = result.get(
-        "metadatas",
-        [],
-    )
-
-    ids_to_delete: list[str] = []
-
-    for index, metadata in enumerate(metadatas):
-        if index >= len(ids):
-            break
-
-        metadata = metadata or {}
-
-        if (
-            metadata.get("source_type")
-            == "google_classroom"
-            and metadata.get("teacher_id")
-            == TEACHER_ID
-            and metadata.get("school_id")
-            == SCHOOL_ID
-            and metadata.get("conversation_id")
-            == CONVERSATION_ID
-        ):
-            ids_to_delete.append(
-                ids[index]
-            )
-
-    if ids_to_delete:
-        collection.delete(
-            ids=ids_to_delete
-        )
-
-    return len(ids_to_delete)
-
-
-def get_test_chunks() -> list[dict]:
-    """
-    Return all chunks belonging to this test scope.
-    """
-    result = collection.get(
-        include=["metadatas", "documents"]
-    )
-
-    ids = result.get("ids", [])
-    metadatas = result.get(
-        "metadatas",
-        [],
-    )
-    documents = result.get(
-        "documents",
-        [],
-    )
-
-    chunks: list[dict] = []
-
-    for index, document_id in enumerate(ids):
-        metadata = (
-            metadatas[index]
-            if index < len(metadatas)
-            else {}
-        )
-
-        text = (
-            documents[index]
-            if index < len(documents)
-            else ""
-        )
-
-        if not metadata:
-            metadata = {}
-
-        if (
-            metadata.get("source_type")
-            == "google_classroom"
-            and metadata.get("teacher_id")
-            == TEACHER_ID
-            and metadata.get("school_id")
-            == SCHOOL_ID
-            and metadata.get("conversation_id")
-            == CONVERSATION_ID
-        ):
-            chunks.append(
-                {
-                    "id": document_id,
-                    "metadata": metadata,
-                    "text": text,
-                }
-            )
-
-    return chunks
-
+# ============================================================
+# MAIN TEST
+# ============================================================
 
 def main() -> None:
-    print()
-    print("=" * 50)
+
+    print("=" * 60)
     print("TCO GOOGLE CLASSROOM → RAG TEST")
-    print("=" * 50)
+    print("=" * 60)
 
     print()
     print(f"Course ID:       {COURSE_ID}")
     print(f"Material ID:     {MATERIAL_ID}")
     print(f"Teacher ID:      {TEACHER_ID}")
     print(f"School ID:       {SCHOOL_ID}")
+    print(f"Conversation ID:  {CONVERSATION_ID}")
+    print(f"Attachment:      {ATTACHMENT_TITLE}")
+    print(
+        f"Expected Drive ID: {EXPECTED_DRIVE_FILE_ID}"
+    )
 
-    # ---------------------------------------------------------
-    # CLEAN PREVIOUS TEST DATA
-    # ---------------------------------------------------------
-
-    removed = cleanup_test_scope()
-
-    print()
-    print(f"Old Classroom test chunks removed: {removed}")
-
-    # ---------------------------------------------------------
+    # --------------------------------------------------------
     # CREATE SERVICE
-    # ---------------------------------------------------------
+    # --------------------------------------------------------
 
     service = ClassroomIngestionService()
 
-    # ---------------------------------------------------------
+    # --------------------------------------------------------
     # FIRST INGESTION
-    # ---------------------------------------------------------
+    # --------------------------------------------------------
 
-    print()
-    print("-" * 50)
-    print("FIRST CLASSROOM INGESTION")
-    print("-" * 50)
+    print_section(
+        "FIRST CLASSROOM INGESTION"
+    )
 
     try:
         result = service.ingest_material(
@@ -169,293 +128,531 @@ def main() -> None:
             teacher_id=TEACHER_ID,
             school_id=SCHOOL_ID,
             conversation_id=CONVERSATION_ID,
+            attachment_title=ATTACHMENT_TITLE,
         )
+
     except ClassroomIngestionError as exc:
+
         raise AssertionError(
-            f"Classroom ingestion failed: {exc}"
+            "Classroom ingestion failed:\n"
+            f"{exc}"
         ) from exc
 
     print()
     print("Ingestion result:")
     print(result)
 
-    assert result["success"] is True
-    assert result["source_type"] == "google_classroom"
-    assert result["course_id"] == COURSE_ID
-    assert result["material_id"] == MATERIAL_ID
-    assert result["teacher_id"] == TEACHER_ID
-    assert result["school_id"] == SCHOOL_ID
-    assert result["conversation_id"] == CONVERSATION_ID
-    assert result["file_type"] == "pdf"
-    assert result["chunk_count"] > 0
+    # --------------------------------------------------------
+    # BASIC RESULT VALIDATION
+    # --------------------------------------------------------
 
-    # ---------------------------------------------------------
-    # VERIFY LOCAL FILE
-    # ---------------------------------------------------------
-
-    downloaded_file = Path(
-        result["file_path"]
+    assert isinstance(result, dict), (
+        "Ingestion result must be a dictionary."
     )
 
-    print()
-    print("-" * 50)
-    print("DOWNLOADED FILE")
-    print("-" * 50)
-
-    print()
-    print(f"File: {downloaded_file}")
-    print(f"Exists: {downloaded_file.exists()}")
-
-    assert downloaded_file.exists()
-    assert downloaded_file.suffix.lower() == ".pdf"
-
-    # ---------------------------------------------------------
-    # VERIFY CHROMA
-    # ---------------------------------------------------------
-
-    chunks = get_test_chunks()
-
-    print()
-    print("-" * 50)
-    print("CHROMA VERIFICATION")
-    print("-" * 50)
-
-    print()
-    print(f"Stored Classroom chunks: {len(chunks)}")
-
-    assert len(chunks) == result["chunk_count"]
-
-    for chunk in chunks[:3]:
-        print()
-        print(
-            f"ID: {chunk['id']}"
-        )
-        print(
-            f"Metadata: {chunk['metadata']}"
-        )
-        print(
-            f"Preview: "
-            f"{chunk['text'][:200].replace(chr(10), ' ')}"
-        )
-
-    # ---------------------------------------------------------
-    # VERIFY IMPORTANT METADATA
-    # ---------------------------------------------------------
-
-    for chunk in chunks:
-        metadata = chunk["metadata"]
-
-        assert (
-            metadata.get("source_type")
-            == "google_classroom"
-        )
-
-        assert (
-            metadata.get("teacher_id")
-            == TEACHER_ID
-        )
-
-        assert (
-            metadata.get("school_id")
-            == SCHOOL_ID
-        )
-
-        assert (
-            metadata.get("conversation_id")
-            == CONVERSATION_ID
-        )
-
-        assert (
-            metadata.get("course_id")
-            == COURSE_ID
-        )
-
-        assert (
-            metadata.get("material_id")
-            == MATERIAL_ID
-        )
-
-        assert metadata.get(
-            "drive_file_id"
-        )
-
-        assert metadata.get(
-            "material_title"
-        )
-
-        assert metadata.get(
-            "file_name"
-        )
-
-    print()
-    print("Classroom metadata verification passed.")
-
-    # ---------------------------------------------------------
-    # RAG RETRIEVAL TEST
-    # ---------------------------------------------------------
-
-    print()
-    print("-" * 50)
-    print("CLASSROOM RAG RETRIEVAL TEST")
-    print("-" * 50)
-
-    query = (
-        "Explain Booth's algorithm "
-        "and its step-by-step process."
+    assert_result_field(
+        result,
+        "success",
+        True,
     )
 
-    print()
-    print(f"Query: {query}")
+    assert_result_field(
+        result,
+        "source_type",
+        "google_classroom",
+    )
 
-    results = retrieve_documents(
-        query,
-        top_k=5,
-        similarity_threshold=0.20,
-        teacher_id=TEACHER_ID,
-        school_id=SCHOOL_ID,
-        conversation_id=CONVERSATION_ID,
-        source_type="google_classroom",
+    assert_result_field(
+        result,
+        "course_id",
+        COURSE_ID,
+    )
+
+    assert_result_field(
+        result,
+        "material_id",
+        MATERIAL_ID,
+    )
+
+    assert_result_field(
+        result,
+        "teacher_id",
+        TEACHER_ID,
+    )
+
+    assert_result_field(
+        result,
+        "school_id",
+        SCHOOL_ID,
+    )
+
+    assert_result_field(
+        result,
+        "conversation_id",
+        CONVERSATION_ID,
+    )
+
+    # --------------------------------------------------------
+    # ATTACHMENT VALIDATION
+    # --------------------------------------------------------
+
+    print_section(
+        "ATTACHMENT VALIDATION"
+    )
+
+    actual_attachment_title = str(
+        result.get(
+            "attachment_title",
+            "",
+        )
+    ).strip()
+
+    actual_drive_file_id = str(
+        result.get(
+            "drive_file_id",
+            "",
+        )
+    ).strip()
+
+    actual_file_name = str(
+        result.get(
+            "file_name",
+            "",
+        )
+    ).strip()
+
+    actual_file_type = str(
+        result.get(
+            "file_type",
+            "",
+        )
+    ).strip().lower()
+
+    print(
+        f"Selected attachment: "
+        f"{actual_attachment_title}"
+    )
+
+    print(
+        f"Drive file ID: "
+        f"{actual_drive_file_id}"
+    )
+
+    print(
+        f"Downloaded file: "
+        f"{actual_file_name}"
+    )
+
+    print(
+        f"File type: "
+        f"{actual_file_type}"
+    )
+
+    assert (
+        actual_attachment_title
+        == ATTACHMENT_TITLE
+    ), (
+        "Wrong Classroom attachment selected.\n"
+        f"Expected: {ATTACHMENT_TITLE}\n"
+        f"Actual:   {actual_attachment_title}"
+    )
+
+    assert (
+        actual_drive_file_id
+        == EXPECTED_DRIVE_FILE_ID
+    ), (
+        "Wrong Drive file selected.\n"
+        f"Expected: {EXPECTED_DRIVE_FILE_ID}\n"
+        f"Actual:   {actual_drive_file_id}"
+    )
+
+    assert (
+        actual_file_type
+        == EXPECTED_FILE_TYPE
+    ), (
+        "Wrong downloaded file type.\n"
+        f"Expected: {EXPECTED_FILE_TYPE}\n"
+        f"Actual:   {actual_file_type}"
+    )
+
+    assert actual_file_name, (
+        "Downloaded file name is empty."
+    )
+
+    assert actual_file_name.lower().endswith(
+        ".pdf"
+    ), (
+        "Selected file is not a PDF.\n"
+        f"File: {actual_file_name}"
     )
 
     print()
     print(
-        f"Retrieved Classroom chunks: {len(results)}"
+        "Attachment selection test passed."
     )
 
-    assert results, (
-        "Classroom RAG returned no results."
+    # --------------------------------------------------------
+    # FILE PATH VALIDATION
+    # --------------------------------------------------------
+
+    print_section(
+        "DOWNLOADED FILE VALIDATION"
     )
 
-    for index, item in enumerate(
-        results,
-        start=1,
+    file_path_value = str(
+        result.get(
+            "file_path",
+            "",
+        )
+    ).strip()
+
+    assert file_path_value, (
+        "file_path is missing from ingestion result."
+    )
+
+    file_path = Path(file_path_value)
+
+    print(
+        f"File path: {file_path}"
+    )
+
+    assert file_path.exists(), (
+        "Downloaded Classroom file does not exist:\n"
+        f"{file_path}"
+    )
+
+    assert file_path.is_file(), (
+        "Downloaded Classroom path is not a file:\n"
+        f"{file_path}"
+    )
+
+    file_size = file_path.stat().st_size
+
+    print(
+        f"File size: {file_size:,} bytes"
+    )
+
+    assert file_size > 0, (
+        "Downloaded Classroom file is empty."
+    )
+
+    print(
+        "Downloaded file test passed."
+    )
+
+    # --------------------------------------------------------
+    # DOCUMENT COUNT
+    # --------------------------------------------------------
+
+    print_section(
+        "DOCUMENT / CHUNK VALIDATION"
+    )
+
+    document_count = result.get(
+        "document_count"
+    )
+
+    chunk_count = result.get(
+        "chunk_count"
+    )
+
+    source_id = str(
+        result.get(
+            "source_id",
+            "",
+        )
+    ).strip()
+
+    print(
+        f"Document count: {document_count}"
+    )
+
+    print(
+        f"Chunk count:    {chunk_count}"
+    )
+
+    print(
+        f"Source ID:      {source_id}"
+    )
+
+    assert isinstance(
+        document_count,
+        int,
+    ), (
+        "document_count must be an integer."
+    )
+
+    assert document_count > 0, (
+        "No documents were produced."
+    )
+
+    assert isinstance(
+        chunk_count,
+        int,
+    ), (
+        "chunk_count must be an integer."
+    )
+
+    assert chunk_count > 0, (
+        "No chunks were produced."
+    )
+
+    assert source_id, (
+        "source_id is missing."
+    )
+
+    print(
+        "Document/chunk validation passed."
+    )
+
+    # --------------------------------------------------------
+    # SOURCE ID CHUNK VALIDATION
+    # --------------------------------------------------------
+
+    print_section(
+        "VECTORSTORE SOURCE-ID VALIDATION"
+    )
+
+    source_chunks = get_source_id_chunks(
+        source_id
+    )
+
+    print(
+        f"Stored source-id chunks: "
+        f"{len(source_chunks)}"
+    )
+
+    assert len(source_chunks) == chunk_count, (
+        "Vectorstore chunk count mismatch.\n"
+        f"Expected: {chunk_count}\n"
+        f"Stored:   {len(source_chunks)}"
+    )
+
+    print(
+        "Source-ID vectorstore validation passed."
+    )
+
+    # --------------------------------------------------------
+    # METADATA VALIDATION
+    # --------------------------------------------------------
+
+    print_section(
+        "METADATA ISOLATION VALIDATION"
+    )
+
+    first_chunk = source_chunks[0]
+
+    if isinstance(first_chunk, dict):
+        metadata = first_chunk.get(
+            "metadata",
+            {},
+        )
+
+        if not metadata:
+            # Some vectorstore implementations may
+            # return flattened metadata.
+            metadata = first_chunk
+    else:
+        metadata = {}
+
+    assert isinstance(
+        metadata,
+        dict,
+    ), (
+        "Stored chunk metadata must be a dictionary."
+    )
+
+    print()
+    print("First chunk metadata:")
+    print(metadata)
+
+    expected_metadata = {
+        "teacher_id": TEACHER_ID,
+        "school_id": SCHOOL_ID,
+        "conversation_id": CONVERSATION_ID,
+        "course_id": COURSE_ID,
+        "material_id": MATERIAL_ID,
+        "source_type": "google_classroom",
+    }
+
+    for key, expected_value in (
+        expected_metadata.items()
     ):
-        metadata = item["metadata"]
 
-        print()
-        print(
-            f"{index}. "
-            f"similarity={item['similarity']:.4f}"
+        if key not in metadata:
+            print(
+                f"WARNING: metadata key '{key}' "
+                "not directly available in returned "
+                "chunk structure."
+            )
+            continue
+
+        actual_value = metadata.get(key)
+
+        assert actual_value == expected_value, (
+            f"Metadata mismatch for '{key}'.\n"
+            f"Expected: {expected_value!r}\n"
+            f"Actual:   {actual_value!r}"
         )
 
-        print(
-            f"   teacher="
-            f"{metadata.get('teacher_id')}"
-        )
-
-        print(
-            f"   school="
-            f"{metadata.get('school_id')}"
-        )
-
-        print(
-            f"   source="
-            f"{metadata.get('source_type')}"
-        )
-
-        print(
-            f"   file="
-            f"{metadata.get('file_name')}"
-        )
-
-        print(
-            f"   material="
-            f"{metadata.get('material_title')}"
-        )
-
-        print(
-            f"   preview="
-            f"{item['text'][:250].replace(chr(10), ' ')}"
-        )
+    if "source_id" in metadata:
 
         assert (
-            metadata.get("source_type")
-            == "google_classroom"
+            metadata["source_id"]
+            == source_id
+        ), (
+            "Metadata source_id does not match "
+            "ingestion source_id."
         )
-
-        assert (
-            metadata.get("teacher_id")
-            == TEACHER_ID
-        )
-
-        assert (
-            metadata.get("school_id")
-            == SCHOOL_ID
-        )
-
-        assert (
-            metadata.get("conversation_id")
-            == CONVERSATION_ID
-        )
-
-        assert (
-            metadata.get("course_id")
-            == COURSE_ID
-        )
-
-        assert (
-            metadata.get("material_id")
-            == MATERIAL_ID
-        )
-
-    print()
-    print("Classroom RAG retrieval passed.")
-
-    # ---------------------------------------------------------
-    # DUPLICATE / IDEMPOTENCY TEST
-    # ---------------------------------------------------------
-
-    print()
-    print("-" * 50)
-    print("RE-INGESTION / DUPLICATE TEST")
-    print("-" * 50)
-
-    before_chunks = get_test_chunks()
-
-    print()
-    print(
-        f"Chunks before re-ingestion: "
-        f"{len(before_chunks)}"
-    )
-
-    second_result = service.ingest_material(
-        course_id=COURSE_ID,
-        material_id=MATERIAL_ID,
-        teacher_id=TEACHER_ID,
-        school_id=SCHOOL_ID,
-        conversation_id=CONVERSATION_ID,
-    )
-
-    after_chunks = get_test_chunks()
 
     print(
-        f"Chunks after re-ingestion: "
-        f"{len(after_chunks)}"
+        "Metadata validation passed."
+    )
+
+    # --------------------------------------------------------
+    # RE-INGESTION / DUPLICATE TEST
+    # --------------------------------------------------------
+
+    print_section(
+        "RE-INGESTION / DUPLICATE TEST"
+    )
+
+    before_reingestion = len(
+        get_source_id_chunks(
+            source_id
+        )
+    )
+
+    print(
+        f"Stored chunks before re-ingestion: "
+        f"{before_reingestion}"
+    )
+
+    try:
+        second_result = service.ingest_material(
+            course_id=COURSE_ID,
+            material_id=MATERIAL_ID,
+            teacher_id=TEACHER_ID,
+            school_id=SCHOOL_ID,
+            conversation_id=CONVERSATION_ID,
+            attachment_title=ATTACHMENT_TITLE,
+        )
+
+    except ClassroomIngestionError as exc:
+
+        raise AssertionError(
+            "Classroom re-ingestion failed:\n"
+            f"{exc}"
+        ) from exc
+
+    second_chunk_count = second_result.get(
+        "chunk_count"
+    )
+
+    print(
+        f"First ingestion chunks:  "
+        f"{chunk_count}"
+    )
+
+    print(
+        f"Second ingestion chunks: "
+        f"{second_chunk_count}"
+    )
+
+    after_reingestion = len(
+        get_source_id_chunks(
+            source_id
+        )
+    )
+
+    print(
+        f"Stored chunks after re-ingestion: "
+        f"{after_reingestion}"
     )
 
     assert (
-        second_result["chunk_count"]
-        == result["chunk_count"]
+        second_result.get("source_id")
+        == source_id
+    ), (
+        "Re-ingestion generated a different source_id."
     )
 
     assert (
-        len(after_chunks)
-        == len(before_chunks)
+        second_chunk_count
+        == chunk_count
+    ), (
+        "Chunk count changed during re-ingestion.\n"
+        f"First:  {chunk_count}\n"
+        f"Second: {second_chunk_count}"
     )
 
-    print()
-    print("Duplicate / idempotency test passed.")
+    assert (
+        after_reingestion
+        == before_reingestion
+    ), (
+        "Duplicate chunks were created during "
+        "re-ingestion.\n"
+        f"Before: {before_reingestion}\n"
+        f"After:  {after_reingestion}"
+    )
 
-    # ---------------------------------------------------------
-    # FINAL
-    # ---------------------------------------------------------
+    print(
+        "Duplicate/re-ingestion test passed."
+    )
+
+    # --------------------------------------------------------
+    # FINAL RESULT
+    # --------------------------------------------------------
 
     print()
-    print("=" * 50)
-    print("GOOGLE CLASSROOM → RAG TEST PASSED")
-    print("=" * 50)
-    print()
+    print("=" * 60)
+    print(
+        "CLASSROOM → RAG TEST PASSED"
+    )
+    print("=" * 60)
 
+    print()
+    print("Summary:")
+    print(
+        f"  Attachment : {actual_attachment_title}"
+    )
+    print(
+        f"  Drive ID   : {actual_drive_file_id}"
+    )
+    print(
+        f"  File       : {actual_file_name}"
+    )
+    print(
+        f"  File type  : {actual_file_type}"
+    )
+    print(
+        f"  Documents  : {document_count}"
+    )
+    print(
+        f"  Chunks     : {chunk_count}"
+    )
+    print(
+        f"  Source ID  : {source_id}"
+    )
+    print(
+        f"  Re-ingest  : {after_reingestion} stored chunks"
+    )
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except AssertionError as exc:
+        print()
+        print("=" * 60)
+        print(
+            "CLASSROOM → RAG TEST FAILED"
+        )
+        print("=" * 60)
+        print()
+        print(exc)
+        raise

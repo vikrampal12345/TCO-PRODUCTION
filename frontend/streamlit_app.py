@@ -13,10 +13,15 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 UPLOAD_ROOT = PROJECT_ROOT / "data" / "documents" / "uploads"
+
 ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".pptx", ".txt", ".md"}
 
 MODE_TEACHER_FILE = "Work Mode — Teacher File + RAG"
+
 MODE_CLASSROOM = "Work Mode — Classroom + RAG"
+
+MODE_WEB = "Work Mode — Web Search + RAG"
+
 MODE_LLM = "AI General Knowledge — Test Mode"
 
 if str(PROJECT_ROOT) not in sys.path:
@@ -28,6 +33,17 @@ import streamlit as st
 from backend.core.bootstrap import build_default_registry
 
 from backend.graph import workflow as master_workflow
+
+from backend.rag.source_retrieval import retrieve_source
+
+from backend.services.source_approval import approve_source
+from backend.agents.evaluation_agent import EvaluationAgent
+from backend.services.assessment_result_lifecycle import AssessmentResultLifecycleService
+from backend.services.assessment_result_service import AssessmentResultService
+from backend.services.evaluation_cycle import EvaluationCycleService
+from backend.services.result_email_service import ResultEmailService
+from backend.services.result_store import ResultStore
+from backend.tools.gmail import GmailTool
 
 from backend.workflows.assessment_delivery import (
 
@@ -225,6 +241,14 @@ if "workflow" not in st.session_state:
 
     st.session_state.workflow = None
 
+if "evaluation_results" not in st.session_state:
+
+    st.session_state.evaluation_results = []
+
+if "result_email_summary" not in st.session_state:
+
+    st.session_state.result_email_summary = None
+
 # =========================================================
 
 # HELPERS
@@ -276,6 +300,12 @@ def reset_workflow() -> None:
     st.session_state.workflow_state = DEFAULT_STATE.copy()
 
     st.session_state.logs = []
+    st.session_state.evaluation_results = []
+    st.session_state.result_email_summary = None
+
+    if "web_source_choice" in st.session_state:
+
+        del st.session_state.web_source_choice
 
     add_log("Workflow reset. Ready for a new assessment.")
 
@@ -508,32 +538,44 @@ def show_error(state: dict[str, Any]) -> None:
         st.error(error)
 
 def save_teacher_upload(uploaded_file: Any, conversation_id: str) -> dict[str, str]:
+
     """Persist a Streamlit UploadedFile so backend RAG can ingest it."""
+
     if uploaded_file is None:
+
         return {}
 
     original_name = Path(str(uploaded_file.name)).name
+
     suffix = Path(original_name).suffix.lower()
 
     if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
+
         raise ValueError("Unsupported file type. Upload PDF, PPTX, TXT, or MD.")
 
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", original_name).strip("._")
+
     if not safe_name:
+
         raise ValueError("The uploaded file name is invalid.")
 
     upload_dir = UPLOAD_ROOT / conversation_id
+
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     target_path = upload_dir / safe_name
+
     target_path.write_bytes(uploaded_file.getbuffer())
 
     return {
-        "uploaded_file_path": str(target_path),
-        "uploaded_file_name": original_name,
-        "uploaded_file_type": suffix.lstrip("."),
-    }
 
+        "uploaded_file_path": str(target_path),
+
+        "uploaded_file_name": original_name,
+
+        "uploaded_file_type": suffix.lstrip("."),
+
+    }
 
 def build_state_from_form(
 
@@ -582,9 +624,38 @@ def build_state_from_form(
     )
 
     is_work_mode = mode in {
+
         MODE_TEACHER_FILE,
+
         MODE_CLASSROOM,
+
+        MODE_WEB,
+
     }
+
+    if mode == MODE_TEACHER_FILE:
+
+        source_preference = "teacher_file_only"
+
+        knowledge_source = "teacher_file"
+
+    elif mode == MODE_CLASSROOM:
+
+        source_preference = "classroom_only"
+
+        knowledge_source = "google_classroom"
+
+    elif mode == MODE_WEB:
+
+        source_preference = "web_search_only"
+
+        knowledge_source = "web_search"
+
+    else:
+
+        source_preference = "general_knowledge"
+
+        knowledge_source = ""
 
     return {
 
@@ -596,15 +667,7 @@ def build_state_from_form(
 
         "school_id": school_id,
 
-        "classroom_course_id": (
-
-            classroom_course_id
-
-            if is_work_mode
-
-            else ""
-
-        ),
+        "classroom_course_id": classroom_course_id if mode == MODE_CLASSROOM else "",
 
         "teacher_request": teacher_request,
 
@@ -628,34 +691,11 @@ def build_state_from_form(
 
         "question_count": question_count,
 
-        "generation_mode": (
-
-            "source_grounded"
-
-            if is_work_mode
-
-            else "llm_generated"
-
-        ),
+        "generation_mode": "source_grounded" if is_work_mode else "llm_generated",
 
         "requested_source": "",
 
-        "source_preference": (
-
-            (
-                "teacher_file_only"
-
-                if mode == MODE_TEACHER_FILE
-
-                else "classroom_only"
-
-            )
-
-            if is_work_mode
-
-            else "general_knowledge"
-
-        ),
+        "source_preference": source_preference,
 
         "source_url": "",
 
@@ -666,36 +706,213 @@ def build_state_from_form(
         "uploaded_file_type": uploaded_file_type,
 
         "uploaded_source_id": "",
-        "knowledge_source": (
-            "teacher_file"
-            if mode == MODE_TEACHER_FILE
-            else "google_classroom"
-            if mode == MODE_CLASSROOM
-            else ""
-        ),
+
         "web_source_fetched": False,
 
         "web_source_content_path": "",
 
-        "knowledge_source": (
-
-            "teacher_file"
-
-            if uploaded_file_path
-
-            else ""
-
-        ),
+        "knowledge_source": knowledge_source,
 
         "section": section,
 
         "missing_information": [],
+
+        "source_candidates": [],
+
+        "selected_source": {},
+
+        "source_approved": False,
+
+        "approval_required": False,
+
+        "approval_type": "",
+
+        "approval_status": "not_ready",
+
+        "approved_by": "",
+
+        "approval_comment": "",
 
         "status": "starting",
 
     }
 
 # =========================================================
+# RESULT / EVALUATION SERVICES
+# =========================================================
+
+def get_result_lifecycle_services():
+    result_store = ResultStore()
+    result_service = AssessmentResultService(
+        result_store=result_store,
+    )
+    evaluation_cycle = EvaluationCycleService(
+        evaluation_agent=EvaluationAgent(),
+        result_service=result_service,
+    )
+    gmail_tool = GmailTool()
+    result_email_service = ResultEmailService(
+        result_store=result_store,
+        gmail_tool=gmail_tool,
+    )
+    lifecycle_service = AssessmentResultLifecycleService(
+        evaluation_cycle=evaluation_cycle,
+        result_email_service=result_email_service,
+    )
+    return result_store, lifecycle_service, result_email_service
+
+
+def evaluate_current_assessment():
+    state = st.session_state.workflow_state
+    form_id = str(state.get("form_id", "") or "").strip()
+    assessment_id = state.get("assessment_id")
+    if not form_id:
+        raise ValueError("Google Form ID is missing.")
+    if assessment_id is None:
+        raise ValueError("Assessment ID is missing.")
+    _, lifecycle_service, _ = get_result_lifecycle_services()
+    results = lifecycle_service.process_form(
+        form_id=form_id,
+        assessment_id=int(assessment_id),
+        school_id=state.get("school_id") or None,
+        class_level=state.get("student_class_level") or None,
+        section=state.get("section") or None,
+        send_email=False,
+    )
+    st.session_state.evaluation_results = results
+    st.session_state.result_email_summary = None
+
+
+def show_evaluation_dashboard(state: dict[str, Any]) -> None:
+    assessment_id = state.get("assessment_id")
+    form_id = str(state.get("form_id", "") or "").strip()
+    if not assessment_id or not form_id:
+        return
+
+    st.divider()
+    st.subheader("Evaluation & Results")
+    st.caption(
+        "Evaluate and save results first. Result emails are sent only after teacher approval."
+    )
+
+    if st.button(
+        "Evaluate Student Responses",
+        type="primary",
+        use_container_width=True,
+        key="evaluate_student_responses",
+    ):
+        add_log("Master Agent reached the evaluation stage.")
+        add_log("Evaluation Agent is processing Google Form responses.")
+        with st.spinner("Evaluating responses and saving results..."):
+            try:
+                evaluate_current_assessment()
+                add_log(
+                    f"Evaluation completed for assessment {assessment_id}."
+                )
+            except Exception as exc:
+                st.error(f"Evaluation failed: {exc}")
+                add_log(f"Evaluation failed: {exc}")
+
+    results = st.session_state.evaluation_results
+    if not results:
+        st.info(
+            "No evaluated responses loaded yet. Students must submit the Google Form first."
+        )
+        return
+
+    rows = []
+    review_count = 0
+    for item in results:
+        if item.get("status") == "review_required":
+            review_count += 1
+            continue
+        evaluation = item.get("evaluation_result") or item.get("evaluation") or {}
+        saved = item.get("saved_result") or {}
+        rows.append({
+            "Result ID": saved.get("result_id"),
+            "Student": saved.get("student_name") or evaluation.get("student_name") or "Unknown",
+            "Email": saved.get("student_email") or "",
+            "Marks": f"{evaluation.get('obtained_marks', saved.get('obtained_marks', 0))} / {evaluation.get('total_marks', saved.get('total_marks', 0))}",
+            "Percentage": evaluation.get("percentage", saved.get("percentage", 0)),
+            "Correct": evaluation.get("correct_answers", saved.get("correct_answers", 0)),
+            "Wrong": evaluation.get("wrong_answers", saved.get("wrong_answers", 0)),
+            "Unanswered": evaluation.get("unanswered", saved.get("unanswered", 0)),
+            "Email": saved.get("result_email_status", "not_sent"),
+        })
+
+    metrics = st.columns(4)
+    metrics[0].metric("Responses", len(results))
+    metrics[1].metric("Saved Results", len(rows))
+    metrics[2].metric("Review Required", review_count)
+    metrics[3].metric(
+        "Average %",
+        round(sum(float(r["Percentage"] or 0) for r in rows) / len(rows), 2) if rows else 0,
+    )
+
+    if rows:
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Result Email")
+        st.warning(
+            "The next action sends real Gmail messages to saved results whose email status is not_sent."
+        )
+        if st.button(
+            "Send Result Emails",
+            type="primary",
+            use_container_width=True,
+            key="send_result_emails",
+        ):
+            add_log("Teacher approved result-email delivery.")
+            with st.spinner("Sending result emails through Gmail..."):
+                try:
+                    _, _, email_service = get_result_lifecycle_services()
+                    summary = email_service.send_pending_results(
+                        assessment_id=int(assessment_id),
+                    )
+                    st.session_state.result_email_summary = summary
+                    add_log(
+                        f"Result email delivery: {summary.get('sent', 0)} sent, "
+                        f"{summary.get('failed', 0)} failed, "
+                        f"{summary.get('skipped', 0)} skipped."
+                    )
+                except Exception as exc:
+                    st.session_state.result_email_summary = {
+                        "status": "failed",
+                        "error": str(exc),
+                    }
+                    add_log(f"Result email delivery failed: {exc}")
+
+    if review_count:
+        st.warning(f"{review_count} response(s) require review and were not finalized.")
+
+    summary = st.session_state.result_email_summary
+    if summary:
+        st.divider()
+        st.subheader("Result Email Status")
+        if summary.get("status") == "failed":
+            st.error(summary.get("error", "Result email delivery failed."))
+        else:
+            cols = st.columns(4)
+            cols[0].metric("Processed", summary.get("total", 0))
+            cols[1].metric("Sent", summary.get("sent", 0))
+            cols[2].metric("Failed", summary.get("failed", 0))
+            cols[3].metric("Skipped", summary.get("skipped", 0))
+            if summary.get("results"):
+                st.dataframe(
+                    [
+                        {
+                            "Result ID": x.get("result_id"),
+                            "Recipient": x.get("recipient"),
+                            "Status": x.get("status"),
+                            "Error": x.get("error", ""),
+                        }
+                        for x in summary["results"]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
 
 # SIDEBAR
 
@@ -739,17 +956,21 @@ with st.sidebar:
 
             MODE_CLASSROOM,
 
+            MODE_WEB,
+
             MODE_LLM,
 
         ],
 
-        index=0,
+        key="tco_mode",
 
         help=(
 
-            "Teacher File mode uses only the uploaded source. "
+            "Teacher File uses only the uploaded source. "
 
-            "Classroom mode uses only Google Classroom. "
+            "Classroom uses only Google Classroom. "
+
+            "Web Search finds sources on the web and waits for teacher approval before RAG. "
 
             "Test Mode allows general AI knowledge."
 
@@ -790,7 +1011,9 @@ with st.sidebar:
             help=(
 
                 "This mode uses only this uploaded file. It will be ingested, "
+
                 "retrieved with RAG, and the retrieved context will be passed "
+
                 "to the Assessment Agent."
 
             ),
@@ -816,6 +1039,14 @@ with st.sidebar:
             st.caption(
 
                 "Classroom mode does not use an uploaded teacher file."
+
+            )
+
+        elif mode == MODE_WEB:
+
+            st.caption(
+
+                "Web Search mode does not use Classroom or a teacher upload."
 
             )
 
@@ -908,6 +1139,7 @@ with st.sidebar:
             "Teacher File Mode: Upload → Ingest → RAG Retrieval → Assessment Agent."
 
         )
+
     elif mode == MODE_CLASSROOM:
 
         st.caption(
@@ -915,6 +1147,15 @@ with st.sidebar:
             "Classroom Mode: Google Classroom → Ingest → RAG Retrieval → Assessment Agent."
 
         )
+
+    elif mode == MODE_WEB:
+
+        st.caption(
+
+            "Web Search Mode: Search → Teacher Approval → Fetch → RAG Retrieval → Assessment Agent."
+
+        )
+
     else:
 
         st.caption(
@@ -1193,7 +1434,7 @@ with input_tab:
 
             try:
 
-                if mode in {MODE_TEACHER_FILE, MODE_CLASSROOM}:
+                if mode in {MODE_TEACHER_FILE, MODE_CLASSROOM, MODE_WEB}:
 
                     add_log(
 
@@ -1214,17 +1455,32 @@ with input_tab:
                             f"Reading uploaded source: {state.get('uploaded_file_name', '')}"
 
                         )
+
                         add_log(
 
                             "Uploaded file will be ingested and retrieved through the common RAG pipeline."
 
                         )
 
-                    else:
+                    elif mode == MODE_CLASSROOM:
 
                         add_log(
 
                             "Classroom Mode: Master Agent will use Google Classroom only."
+
+                        )
+
+                    elif mode == MODE_WEB:
+
+                        add_log(
+
+                            "Web Search Mode: Classroom and teacher-file retrieval are disabled."
+
+                        )
+
+                        add_log(
+
+                            "Web source candidates require teacher approval before fetching."
 
                         )
 
@@ -1233,11 +1489,22 @@ with input_tab:
                     if state.get("knowledge_source") == "teacher_file":
 
                         add_log("Teacher file was ingested and relevant context was retrieved.")
+
                         add_log("Retrieved context is being passed to the Assessment Agent as generation context.")
 
                     elif state.get("knowledge_source") == "google_classroom":
 
                         add_log("Google Classroom material was retrieved through RAG.")
+
+                    elif state.get("knowledge_source") == "web_search":
+
+                        if state.get("source_candidates") and not state.get("source_approved"):
+
+                            add_log(
+
+                                f"Found {len(state.get('source_candidates', []))} web source candidates. Waiting for teacher approval."
+
+                            )
 
                     if state.get("status") == (
 
@@ -1281,6 +1548,14 @@ with input_tab:
 
                             )
 
+                        elif state.get("knowledge_source") == "web_search":
+
+                            add_log(
+
+                                "Approved web source was extracted, indexed, and retrieved through RAG."
+
+                            )
+
                         add_log(
 
                             f"Source approved: "
@@ -1303,9 +1578,19 @@ with input_tab:
 
                         )
 
-                        if clarification and not state.get(
+                        if (
 
-                            "error_message"
+                            clarification
+
+                            and not state.get("error_message")
+
+                            and not (
+
+                                state.get("knowledge_source") == "web_search"
+
+                                and state.get("source_candidates")
+
+                            )
 
                         ):
 
@@ -1388,6 +1673,458 @@ with input_tab:
         st.rerun()
 
     state = st.session_state.workflow_state
+
+    # =====================================================
+
+    # =====================================================
+    # WEB SOURCE APPROVAL
+    # =====================================================
+
+    if state.get("knowledge_source") == "web_search":
+
+        # -------------------------------------------------
+        # CASE 1: Source is already approved.
+        # Keep it visible after reruns so a fetch/RAG
+        # failure does not look like a UI reset.
+        # -------------------------------------------------
+        if state.get("source_approved"):
+
+            st.divider()
+            st.subheader("Approved Web Source")
+
+            selected_source = state.get(
+                "selected_source",
+                {},
+            ) or {}
+
+            source_title = str(
+                selected_source.get(
+                    "title",
+                    "Approved web source",
+                )
+                or "Approved web source"
+            ).strip()
+
+            source_url = str(
+                selected_source.get(
+                    "url",
+                    "",
+                )
+                or state.get("source_url", "")
+                or ""
+            ).strip()
+
+            source_status = str(
+                state.get("source_status", "")
+                or ""
+            ).strip()
+
+            retrieved_context = str(
+                state.get("retrieved_context", "")
+                or ""
+            )
+
+            st.success(
+                "Teacher-approved web source is active."
+            )
+
+            st.write(
+                f"**Source:** {source_title}"
+            )
+
+            if source_url:
+                st.write(
+                    f"**URL:** [{source_url}]({source_url})"
+                )
+
+            st.write(
+                f"**Source status:** "
+                f"`{source_status or 'approved'}`"
+            )
+
+            st.write(
+                f"**RAG context:** "
+                f"{len(retrieved_context)} characters"
+            )
+
+            if retrieved_context:
+                st.success(
+                    "Web source content was fetched and relevant RAG context is ready."
+                )
+
+            if state.get("error_message"):
+                st.error(
+                    str(state.get("error_message"))
+                )
+
+            # Approved source is retained even if RAG failed.
+            # Allow retry without asking the teacher to search again.
+            if not retrieved_context:
+
+                retry_web_rag = st.button(
+                    "Retry Fetch & RAG",
+                    type="primary",
+                    use_container_width=True,
+                    key="retry_web_rag",
+                )
+
+                if retry_web_rag:
+
+                    add_log(
+                        "Retrying the teacher-approved web source."
+                    )
+
+                    with st.spinner(
+                        "Fetching approved source and retrieving RAG context..."
+                    ):
+                        try:
+
+                            state = retrieve_source(state)
+
+                            if state.get("retrieved_context"):
+
+                                add_log(
+                                    "Approved web source fetched and RAG context is ready."
+                                )
+
+                                workflow = get_workflow()
+
+                                with st.spinner(
+                                    "Assessment Agent is generating the web-grounded assessment..."
+                                ):
+                                    state = (
+                                        workflow.generate_and_review(
+                                            state
+                                        )
+                                    )
+
+                                if state.get("status") == (
+                                    "assessment_ready_for_review"
+                                ):
+                                    state[
+                                        "assessment_review_status"
+                                    ] = "passed"
+
+                                    state[
+                                        "assessment_review_feedback"
+                                    ] = (
+                                        "Review bypassed for "
+                                        "end-to-end workflow test."
+                                    )
+
+                                    state["status"] = (
+                                        "assessment_ready_for_teacher"
+                                    )
+
+                                    add_log(
+                                        "Assessment Agent generated the web-grounded assessment."
+                                    )
+
+                            else:
+
+                                clarification = str(
+                                    state.get(
+                                        "clarification_message",
+                                        "",
+                                    )
+                                    or ""
+                                )
+
+                                if clarification:
+                                    state["error_message"] = (
+                                        clarification
+                                    )
+
+                                add_log(
+                                    "Retry completed, but no relevant RAG context was retrieved."
+                                )
+
+                        except Exception as exc:
+
+                            state["source_approved"] = True
+                            state["approval_status"] = "approved"
+                            state[
+                                "status"
+                            ] = "assessment_generation_failed"
+                            state[
+                                "error_message"
+                            ] = str(exc)
+
+                            add_log(
+                                f"Web source retry failed: {exc}"
+                            )
+
+                    st.session_state.workflow_state = state
+                    st.rerun()
+
+        # -------------------------------------------------
+        # CASE 2: Search candidates are waiting for approval.
+        # -------------------------------------------------
+        elif state.get("source_candidates"):
+
+            st.divider()
+            st.subheader("Choose a Web Source")
+
+            st.info(
+                "TCO found these web sources. Review the source and approve one before TCO fetches it and uses it for assessment generation."
+            )
+
+            candidates = [
+                dict(candidate)
+                for candidate in state.get(
+                    "source_candidates",
+                    [],
+                )
+                if isinstance(candidate, dict)
+                and str(
+                    candidate.get("url", "")
+                    or ""
+                ).strip()
+            ]
+
+            labels = []
+            valid_candidates = []
+
+            for candidate in candidates:
+
+                title = str(
+                    candidate.get(
+                        "title",
+                        "Untitled source",
+                    )
+                    or "Untitled source"
+                ).strip()
+
+                domain = str(
+                    candidate.get(
+                        "domain",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                labels.append(
+                    f"{title} — {domain or 'web'}"
+                )
+
+                valid_candidates.append(candidate)
+
+            if valid_candidates:
+
+                choice = st.radio(
+                    "Available sources",
+                    options=labels,
+                    key="web_source_choice",
+                )
+
+                selected_candidate = valid_candidates[
+                    labels.index(choice)
+                ]
+
+                st.markdown(
+                    f"**Title:** "
+                    f"{selected_candidate.get('title', '')}"
+                )
+
+                st.markdown(
+                    f"**Domain:** "
+                    f"{selected_candidate.get('domain', '')}"
+                )
+
+                source_url = str(
+                    selected_candidate.get(
+                        "url",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                st.markdown(
+                    f"**URL:** [{source_url}]({source_url})"
+                )
+
+                snippet = str(
+                    selected_candidate.get(
+                        "snippet",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                if snippet:
+                    with st.expander(
+                        "Search result preview",
+                        expanded=False,
+                    ):
+                        st.write(snippet)
+
+                approve_source_button = st.button(
+                    "Approve Source & Continue",
+                    type="primary",
+                    use_container_width=True,
+                    key="approve_web_source",
+                )
+
+                if approve_source_button:
+
+                    add_log(
+                        f"Teacher selected web source: "
+                        f"{selected_candidate.get('title', '')}"
+                    )
+
+                    with st.spinner(
+                        "Approving source, extracting content, and retrieving relevant context..."
+                    ):
+                        try:
+
+                            approval_result = approve_source(
+                                state,
+                                selected_url=source_url,
+                                teacher_id=state.get(
+                                    "teacher_id",
+                                    teacher_id,
+                                ),
+                                approval_comment=(
+                                    "Teacher approved source "
+                                    "for assessment generation."
+                                ),
+                            )
+
+                            if not approval_result.success:
+                                raise RuntimeError(
+                                    approval_result.error_message
+                                    or "Web source approval failed."
+                                )
+
+                            state.update(
+                                approval_result.data or {}
+                            )
+
+                            add_log(
+                                "Web source approval recorded."
+                            )
+
+                            # Fetch the approved source and run
+                            # source-isolated RAG retrieval.
+                            state = retrieve_source(
+                                state
+                            )
+
+                            if state.get(
+                                "retrieved_context"
+                            ):
+
+                                add_log(
+                                    "Approved web source fetched and RAG context is ready."
+                                )
+
+                                workflow = get_workflow()
+
+                                with st.spinner(
+                                    "Assessment Agent is generating the web-grounded assessment..."
+                                ):
+                                    state = (
+                                        workflow.generate_and_review(
+                                            state
+                                        )
+                                    )
+
+                                if state.get("status") == (
+                                    "assessment_ready_for_review"
+                                ):
+
+                                    state[
+                                        "assessment_review_status"
+                                    ] = "passed"
+
+                                    state[
+                                        "assessment_review_feedback"
+                                    ] = (
+                                        "Review bypassed for "
+                                        "end-to-end workflow test."
+                                    )
+
+                                    state["status"] = (
+                                        "assessment_ready_for_teacher"
+                                    )
+
+                                    add_log(
+                                        "Assessment Agent generated the web-grounded assessment."
+                                    )
+
+                            else:
+
+                                clarification = str(
+                                    state.get(
+                                        "clarification_message",
+                                        "",
+                                    )
+                                    or ""
+                                )
+
+                                if clarification:
+                                    state[
+                                        "error_message"
+                                    ] = clarification
+
+                                # The teacher has approved this URL.
+                                # Preserve approval so the UI shows the
+                                # approved source and offers retry.
+                                state[
+                                    "source_approved"
+                                ] = True
+
+                                state[
+                                    "approval_status"
+                                ] = "approved"
+
+                                add_log(
+                                    "Web source was approved, but RAG context was not retrieved."
+                                )
+
+                        except Exception as exc:
+
+                            # Do not turn a downstream fetch/RAG
+                            # failure into a blank/reset UI state.
+                            state[
+                                "source_approved"
+                            ] = True
+
+                            state[
+                                "approval_status"
+                            ] = "approved"
+
+                            state[
+                                "status"
+                            ] = (
+                                "assessment_generation_failed"
+                            )
+
+                            state[
+                                "error_message"
+                            ] = str(exc)
+
+                            add_log(
+                                f"Web source workflow failed: {exc}"
+                            )
+
+                    st.session_state.workflow_state = state
+                    st.rerun()
+
+            else:
+
+                st.warning(
+                    "Web search returned candidates, but no valid source URL is available."
+                )
+
+        # -------------------------------------------------
+        # CASE 3: Web mode but nothing has been searched yet.
+        # -------------------------------------------------
+        else:
+
+            st.info(
+                "Web Search mode is active. Run Generate Assessment to search for web source candidates."
+            )
 
     if state.get("questions"):
 
@@ -1613,7 +2350,25 @@ with process_tab:
 
                     if state.get("knowledge_source") == "google_classroom"
 
-                    else "Test Mode: source routing is intentionally bypassed."
+                    else (
+
+                        "Web Search Mode: waiting for teacher to approve a source."
+
+                        if state.get("knowledge_source") == "web_search"
+
+                        and not state.get("retrieved_context")
+
+                        else (
+
+                            "Web Search Mode: approved source was retrieved through RAG."
+
+                            if state.get("knowledge_source") == "web_search"
+
+                            else "Test Mode: source routing is intentionally bypassed."
+
+                        )
+
+                    )
 
                 )
 
@@ -1755,19 +2510,57 @@ with result_tab:
 
         )
 
-        source_cols[3].write(
+        if state.get("knowledge_source") == "web_search":
 
-            f"**File:** `{state.get('uploaded_file_name', '')}`"
+            source_title = str(
 
-        )
+                state.get("selected_source", {}).get("title", "")
 
-        if state.get("uploaded_file_name"):
-
-            st.info(
-
-                f"Teacher source file used: **{state.get('uploaded_file_name')}**"
+                or "Web source"
 
             )
+
+            source_cols[3].write(
+
+                f"**Source:** `{source_title}`"
+
+            )
+
+            source_url = str(
+
+                state.get("selected_source", {}).get("url", "")
+
+                or state.get("source_url", "")
+
+            ).strip()
+
+            if source_url:
+
+                st.link_button(
+
+                    "Open Approved Web Source",
+
+                    source_url,
+
+                    use_container_width=False,
+
+                )
+
+        else:
+
+            source_cols[3].write(
+
+                f"**File:** `{state.get('uploaded_file_name', '')}`"
+
+            )
+
+            if state.get("uploaded_file_name"):
+
+                st.info(
+
+                    f"Teacher source file used: **{state.get('uploaded_file_name')}**"
+
+                )
 
         if state.get("retrieved_context"):
 
@@ -1779,7 +2572,15 @@ with result_tab:
 
                     if state.get("knowledge_source") == "teacher_file"
 
-                    else "Retrieved Classroom context"
+                    else (
+
+                        "Retrieved web-source context"
+
+                        if state.get("knowledge_source") == "web_search"
+
+                        else "Retrieved Classroom context"
+
+                    )
 
                 ),
 
@@ -2008,5 +2809,7 @@ with result_tab:
             state.get("student_email_failed", 0),
 
         )
+
+    show_evaluation_dashboard(state)
 
     show_error(state)

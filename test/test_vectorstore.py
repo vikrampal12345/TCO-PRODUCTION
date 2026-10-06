@@ -1,24 +1,26 @@
 from pathlib import Path
 
-from backend.rag.loader import load_file
+from backend.rag import loader
 from backend.rag.vectorstore import (
     collection,
     create_chunks,
     get_collection_count,
-    get_source_chunks,
+    get_source_id_chunks,
     index_file,
 )
 
 
-PROJECT_ROOT = (
-    Path(__file__).resolve().parent.parent
-)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 PDF_PATH = (
     PROJECT_ROOT
     / "data"
     / "documents"
     / "sql_notes.pdf"
+)
+
+TEST_SOURCE_ID = (
+    "vectorstore_test_sql_notes_pdf"
 )
 
 
@@ -60,11 +62,11 @@ def test_chunking() -> None:
 
 def test_pdf_loading() -> None:
     """
-    Confirm that the loader and vectorstore
-    receive the expected PDF documents.
+    Confirm that the loader returns valid
+    document structures for the SQL PDF.
     """
 
-    documents = load_file(
+    documents = loader.load_file(
         str(PDF_PATH)
     )
 
@@ -90,10 +92,26 @@ def test_pdf_loading() -> None:
     )
 
 
+def test_collection_exists() -> None:
+    """
+    Verify the Chroma collection exists.
+    """
+
+    assert collection is not None
+
+    print(
+        "Chroma collection:"
+    )
+
+    print(
+        collection.name
+    )
+
+
 def test_indexing() -> None:
     """
-    Index the SQL PDF and verify that its
-    chunks exist in ChromaDB.
+    Index the SQL PDF using a deterministic test source_id
+    and verify exactly those chunks through source_id lookup.
     """
 
     source = str(
@@ -110,7 +128,9 @@ def test_indexing() -> None:
     )
 
     chunk_count = index_file(
-        source
+        source,
+        loader=loader,
+        source_id=TEST_SOURCE_ID,
     )
 
     assert chunk_count > 0, (
@@ -132,25 +152,50 @@ def test_indexing() -> None:
     )
 
     source_chunks = (
-        get_source_chunks(
-            source
+        get_source_id_chunks(
+            TEST_SOURCE_ID
         )
     )
 
     assert source_chunks, (
-        "No chunks found for the indexed source."
+        "No chunks found for the indexed source_id."
+    )
+
+    print(
+        "Stored source-id chunks:",
+        len(source_chunks),
     )
 
     assert len(source_chunks) == (
         chunk_count
     ), (
         "Indexed chunk count and stored "
-        "source chunk count do not match."
+        "source-id chunk count do not match."
     )
 
+    for chunk in source_chunks:
+
+        assert chunk.get("id"), (
+            "Stored chunk is missing an ID."
+        )
+
+        assert chunk.get("text", "").strip(), (
+            "Stored chunk contains empty text."
+        )
+
+        metadata = chunk.get(
+            "metadata",
+            {},
+        )
+
+        assert metadata.get(
+            "source_id"
+        ) == TEST_SOURCE_ID, (
+            "Stored chunk has an unexpected source_id."
+        )
+
     print(
-        "Stored source chunks:",
-        len(source_chunks),
+        "Source ID metadata test passed."
     )
 
     print(
@@ -159,22 +204,6 @@ def test_indexing() -> None:
 
     print(
         source_chunks[0]["text"][:500]
-    )
-
-
-def test_collection_exists() -> None:
-    """
-    Verify the Chroma collection itself exists.
-    """
-
-    assert collection is not None
-
-    print(
-        "Chroma collection:"
-    )
-
-    print(
-        collection.name
     )
 
 
@@ -198,6 +227,14 @@ def main() -> None:
 
     print(
         PDF_PATH
+    )
+
+    print(
+        "\nTest source ID:"
+    )
+
+    print(
+        TEST_SOURCE_ID
     )
 
     test_chunking()

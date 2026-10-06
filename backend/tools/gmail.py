@@ -175,7 +175,6 @@ class GmailTool(BaseTool):
             )
 
         if "@" not in email:
-
             raise ValueError(
                 f"Invalid email address: {email}"
             )
@@ -202,13 +201,11 @@ class GmailTool(BaseTool):
         body = str(body)
 
         if not subject:
-
             raise ValueError(
                 "Email subject cannot be empty."
             )
 
         if not body.strip():
-
             raise ValueError(
                 "Email body cannot be empty."
             )
@@ -221,13 +218,11 @@ class GmailTool(BaseTool):
         message["Subject"] = subject
 
         if cc:
-
             message["Cc"] = (
                 self._validate_email(cc)
             )
 
         if bcc:
-
             message["Bcc"] = (
                 self._validate_email(bcc)
             )
@@ -281,12 +276,8 @@ class GmailTool(BaseTool):
 
             return ToolResult.ok(
                 data={
-                    "message_id": result.get(
-                        "id"
-                    ),
-                    "thread_id": result.get(
-                        "threadId"
-                    ),
+                    "message_id": result.get("id"),
+                    "thread_id": result.get("threadId"),
                     "to": to,
                     "subject": subject,
                 },
@@ -363,9 +354,15 @@ class GmailTool(BaseTool):
 
         for recipient in recipients:
 
-            email = self._validate_email(
-                recipient
-            )
+            try:
+                email = self._validate_email(
+                    recipient
+                )
+            except ValueError as exc:
+                return ToolResult.failure(
+                    "INVALID_EMAIL_DATA",
+                    str(exc),
+                )
 
             normalized = email.lower()
 
@@ -419,16 +416,42 @@ class GmailTool(BaseTool):
                     }
                 )
 
-        return ToolResult.ok(
-            data={
-                "total_recipients": len(
-                    unique_recipients
+        # -----------------------------------------------------
+        # Build final bulk result
+        # -----------------------------------------------------
+
+        bulk_data = {
+            "total_recipients": len(
+                unique_recipients
+            ),
+            "sent_count": len(sent),
+            "failed_count": len(failed),
+            "sent": sent,
+            "failed": failed,
+        }
+
+        # -----------------------------------------------------
+        # IMPORTANT:
+        # If even one email fails, the overall operation
+        # must be reported as a failure.
+        #
+        # This is required by ResultEmailService because it
+        # checks result.success before marking the database
+        # result as "sent".
+        # -----------------------------------------------------
+
+        if failed:
+
+            return ToolResult.failure(
+                "GMAIL_BULK_SEND_FAILED",
+                (
+                    f"Failed to send email to "
+                    f"{len(failed)} recipient(s)."
                 ),
-                "sent_count": len(sent),
-                "failed_count": len(failed),
-                "sent": sent,
-                "failed": failed,
-            },
+            )
+
+        return ToolResult.ok(
+            data=bulk_data,
             metadata={
                 "tool": self.name,
                 "operation": "email.send_bulk",

@@ -103,6 +103,39 @@ question_count
 marks
 
 ==================================================
+ANALYTICS
+==================================================
+
+For analytics requests, use:
+
+analytics.performance
+    -> analyze student/class performance
+
+Examples:
+
+"Rohan ki detail dikhao"
+"electro ki detail dikhao"
+"20 marks se less students dikhao"
+"top students dikhao"
+"class performance dikhao"
+
+Analytics requests DO NOT require:
+- subject
+- class level
+- topic
+- question count
+- marks
+
+For student-detail requests:
+- extract the student name when provided
+- do not ask for subject/class/topic just to identify the analytics capability
+
+For filtering/ranking/class-performance requests:
+- preserve the teacher's stated filters
+- do not invent missing values
+- route the request to analytics.performance
+
+==================================================
 SOURCE POLICY
 ==================================================
 
@@ -319,6 +352,7 @@ TEACHER REQUEST:
         state_intent = str(
             state.get("intent", "") or ""
         ).strip()
+
         intent = (
             decision.intent
             if decision.intent and decision.intent != "unknown"
@@ -330,16 +364,19 @@ TEACHER REQUEST:
             or state.get("class_level", "")
             or ""
         )
+
         subject = (
             decision.subject
             or state.get("subject", "")
             or ""
         )
+
         chapter = (
             decision.chapter
             or state.get("chapter", "")
             or ""
         )
+
         topic = (
             decision.topic
             or decision.chapter
@@ -347,6 +384,7 @@ TEACHER REQUEST:
             or state.get("chapter", "")
             or ""
         )
+
         student_name = (
             decision.student_name
             or state.get("student_name", "")
@@ -358,6 +396,7 @@ TEACHER REQUEST:
             if decision.question_count is not None
             else state.get("question_count")
         )
+
         marks = (
             decision.marks
             if decision.marks is not None
@@ -368,18 +407,24 @@ TEACHER REQUEST:
             state.get("generation_mode")
             if state.get("generation_mode")
             in {"source_grounded", "llm_generated"}
-            else (decision.generation_mode or "source_grounded")
+            else (
+                decision.generation_mode
+                or "source_grounded"
+            )
         )
+
         requested_source = (
             decision.requested_source
             or state.get("requested_source", "")
             or ""
         )
+
         source_preference = (
             state.get("source_preference")
             or decision.source_preference
             or "classroom_first"
         )
+
         source_url = (
             decision.source_url
             or state.get("source_url", "")
@@ -390,11 +435,19 @@ TEACHER REQUEST:
         # DETERMINISTIC ASSESSMENT VALIDATION
         # =====================================================
 
-        missing = list(
-            decision.missing_information
-        )
+        # Only assessment requests are subject to mandatory
+        # topic/question_count/marks validation.
+        #
+        # Analytics requests can legitimately work without
+        # subject/class/topic/marks/question_count.
+
+        missing: list[str] = []
 
         if intent == "assessment":
+
+            missing = list(
+                decision.missing_information
+            )
 
             if not topic:
                 if "topic" not in missing:
@@ -418,7 +471,7 @@ TEACHER REQUEST:
         )
 
         if (
-            decision.intent == "assessment"
+            intent == "assessment"
             and missing
         ):
 
@@ -446,7 +499,7 @@ TEACHER REQUEST:
             )
 
         # =====================================================
-        # MISSING INFORMATION â†’ ASK TEACHER
+        # MISSING INFORMATION -> ASK TEACHER
         # =====================================================
 
         if missing:
@@ -508,13 +561,31 @@ TEACHER REQUEST:
 
         capability = capability.strip()
 
+        # =====================================================
+        # CAPABILITY-BASED INTENT NORMALIZATION
+        # =====================================================
+
+        # Analytics is an independent capability.
+        # Its requests must not inherit assessment intent
+        # or assessment-specific requirements.
+
+        if (
+            capability == "analytics.performance"
+            and intent != "analytics"
+        ):
+            intent = "analytics"
+
+        # =====================================================
+        # REGISTERED CAPABILITY CHECK
+        # =====================================================
+
         if not self.registry.has_capability(
             capability
         ):
             return {
                 **state,
 
-                "intent": decision.intent,
+                "intent": intent,
                 "language": decision.language,
 
                 "required_capability": capability,
