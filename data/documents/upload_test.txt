@@ -1,0 +1,10 @@
+Binary Search
+
+Binary search is an efficient searching algorithm used on sorted arrays.
+
+The algorithm repeatedly divides the search interval into half.
+If the target value is equal to the middle element, the search is successful.
+If the target is smaller than the middle element, search continues in the left half.
+Otherwise, search continues in the right half.
+
+The time complexity of binary search is O(log n).
