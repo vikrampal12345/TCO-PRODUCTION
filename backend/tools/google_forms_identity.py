@@ -114,7 +114,7 @@ class GoogleFormsIdentityTool(BaseTool):
         # modification use the same Forms body scope/token.
         self.token_file = (
             self.project_root
-            / "token.json"
+            / "forms_token.json"
         )
 
     # =========================================================
@@ -764,3 +764,5 @@ def add_student_identity_field(
         form_id=form_id,
         required=required,
     )
+
+
