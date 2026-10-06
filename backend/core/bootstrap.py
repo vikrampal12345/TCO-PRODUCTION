@@ -1,6 +1,7 @@
 from collections.abc import Iterable
 from typing import Any
 
+from backend.agents.analytics_agent import AnalyticsAgent
 from backend.agents.assessment_agent import AssessmentAgent
 from backend.agents.assessment_review_agent import AssessmentReviewAgent
 
@@ -49,6 +50,7 @@ def build_default_registry() -> ComponentRegistry:
     Registered agents:
         - Assessment Agent
         - Assessment Review Agent
+        - Analytics Agent
 
     Registered tools:
         - Database Tool
@@ -71,14 +73,14 @@ def build_default_registry() -> ComponentRegistry:
         AssessmentReviewAgent()
     )
 
+    registry.register_agent(
+        AnalyticsAgent()
+    )
+
     # Future specialist agents:
     #
     # registry.register_agent(
     #     EvaluationAgent()
-    # )
-    #
-    # registry.register_agent(
-    #     AnalyticsAgent()
     # )
     #
     # registry.register_agent(
@@ -116,7 +118,9 @@ def build_default_registry() -> ComponentRegistry:
     #     form.identity.add
     #
     # This tool adds:
+    #     Student Name
     #     Student ID / Roll Number
+    #     Email ID
     #
     # to every TCO Google Form.
     # ---------------------------------------------------------
