@@ -172,3 +172,11 @@ forms_token.json
 
 # Classroom downloaded/cache data
 data/classroom_cache/
+
+# OAuth token backups
+token_forms_wrong_scope_backup.json
+
+
+# Generated web-source runtime data
+data/documents/web_sources/
+
