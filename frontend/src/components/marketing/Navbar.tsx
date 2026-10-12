@@ -68,7 +68,6 @@ export const Navbar: React.FC = () => {
             <span className="tco-navbar-mark" aria-hidden="true">
               <img src="/tco-monogram.png" alt="" />
             </span>
-            <span className="tco-navbar-wordmark">TCO</span>
           </Link>
 
           {/* ==================== DESKTOP NAV ==================== */}

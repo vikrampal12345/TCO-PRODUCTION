@@ -9,9 +9,9 @@ export const Footer: React.FC = () => {
         <div className="py-12 sm:py-14 grid grid-cols-1 md:grid-cols-4 gap-10">
           <div className="md:col-span-2">
             <Link to="/" className="inline-flex items-center gap-3 mb-5">
-              <div className="w-9 h-9 rounded-xl bg-white flex items-center justify-center">
-                <span className="font-extrabold text-sm tracking-wider text-black">TCO</span>
-              </div>
+              <span className="tco-navbar-mark" aria-hidden="true">
+                <img src="/tco-monogram.png" alt="" />
+              </span>
               <span className="font-bold text-white text-lg">Teacher Co-Worker</span>
             </Link>
 

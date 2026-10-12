@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "TCO \u2014 Teacher Co-Worker: AI co-worker for the work behind the classroom. AI assists. Teachers decide.",
+  "description": "TCO — Teacher Co-Worker: AI co-worker for the work behind the classroom. AI assists. Teachers decide.",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -11,6 +11,7 @@
     "check:backend": "node scripts/check-backend.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
     "clsx": "^2.1.1",
     "framer-motion": "^11.5.4",
     "lucide-react": "^0.441.0",

@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { useAuth } from '../context/AuthContext';
-import { UserRole } from '../types/auth';
+import type { UserRole } from '../types/auth';
+
 import {
   ArrowRight,
   Loader2,
@@ -10,6 +11,7 @@ import {
   Mail,
   Lock,
 } from 'lucide-react';
+
 import { errorMessage } from '../services/http';
 
 export const Signup: React.FC = () => {
@@ -17,42 +19,85 @@ export const Signup: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
   const [role] = useState<UserRole>('Teacher');
+
   const [school] = useState(
     'Department of Computer Science & Engineering'
   );
+
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const { signup } = useAuth();
+  const { signup, isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (
+    e: React.FormEvent<HTMLFormElement>
+  ) => {
     e.preventDefault();
 
-    if (!name.trim() || !email.trim()) return;
-
     setAuthError(null);
+    setSuccessMessage(null);
+    setPasswordError(null);
+
+    const normalizedName = name.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!normalizedName) {
+      setAuthError('Please enter your full name.');
+      return;
+    }
+
+    if (!normalizedEmail) {
+      setAuthError('Please enter your email address.');
+      return;
+    }
+
+    if (password.length < 8) {
+      setPasswordError(
+        'Password must contain at least 8 characters.'
+      );
+      return;
+    }
 
     if (password !== confirmPassword) {
       setPasswordError('Passwords do not match.');
       return;
     }
 
-    setPasswordError(null);
     setIsSubmitting(true);
 
     try {
       await signup({
-        name: name.trim(),
-        email: email.trim(),
+        name: normalizedName,
+        email: normalizedEmail,
         password,
         role,
         school,
       });
 
-      navigate('/workspace');
+      /*
+       * Supabase may create an account without creating a session
+       * when email confirmation is enabled.
+       *
+       * Check the actual authentication state instead of assuming
+       * every successful signup means the user is logged in.
+       */
+      if (isAuthenticated) {
+        navigate('/workspace', { replace: true });
+      } else {
+        navigate('/login', {
+          replace: true,
+          state: {
+            message:
+              'Your account has been created. Please check your email to confirm your account before signing in, if confirmation is required.',
+          },
+        });
+      }
     } catch (error) {
       setAuthError(errorMessage(error));
     } finally {
@@ -85,9 +130,25 @@ export const Signup: React.FC = () => {
       title="Create Your Account"
       subtitle="Let TCO handle the busywork. You stay in control."
     >
-      {authError && <div role="alert" className="mb-4 rounded-xl border border-white/15 bg-white/[0.05] px-3 py-2.5 text-xs text-gray-200">{authError}</div>}
-      <div className="relative">
+      {authError && (
+        <div
+          role="alert"
+          className="mb-4 rounded-xl border border-white/15 bg-white/[0.05] px-3 py-2.5 text-xs text-gray-200"
+        >
+          {authError}
+        </div>
+      )}
 
+      {successMessage && (
+        <div
+          role="status"
+          className="mb-4 rounded-xl border border-white/15 bg-white/[0.05] px-3 py-2.5 text-xs text-gray-200"
+        >
+          {successMessage}
+        </div>
+      )}
+
+      <div className="relative">
         {/* Loading Overlay */}
         {isSubmitting && (
           <div
@@ -108,17 +169,16 @@ export const Signup: React.FC = () => {
             <Loader2 className="w-8 h-8 text-white animate-spin" />
 
             <div className="text-sm font-semibold text-white">
-              Setting up your TCO workspace...
+              Creating your TCO account...
             </div>
 
             <div className="text-xs text-gray-400">
-              Initializing your personal Master Agent mesh...
+              Preparing your teacher workspace...
             </div>
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-
           {/* FULL NAME */}
           <div>
             <label
@@ -148,10 +208,14 @@ export const Signup: React.FC = () => {
                 id="signup-name"
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setAuthError(null);
+                }}
                 placeholder="Prof. Jane Doe"
                 autoComplete="name"
                 required
+                disabled={isSubmitting}
                 className={inputClassName}
               />
             </div>
@@ -186,10 +250,14 @@ export const Signup: React.FC = () => {
                 id="signup-email"
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setAuthError(null);
+                }}
                 placeholder="jane.doe@university.edu"
                 autoComplete="email"
                 required
+                disabled={isSubmitting}
                 className={inputClassName}
               />
             </div>
@@ -226,17 +294,24 @@ export const Signup: React.FC = () => {
                 value={password}
                 onChange={(e) => {
                   const nextPassword = e.target.value;
+
                   setPassword(nextPassword);
                   setAuthError(null);
+
                   setPasswordError(
-                    confirmPassword.length > 0 && nextPassword !== confirmPassword
-                      ? 'Passwords do not match.'
-                      : null
+                    nextPassword.length > 0 && nextPassword.length < 8
+                      ? 'Password must contain at least 8 characters.'
+                      : confirmPassword.length > 0 &&
+                          nextPassword !== confirmPassword
+                        ? 'Passwords do not match.'
+                        : null
                   );
                 }}
                 placeholder="Create a strong password"
                 autoComplete="new-password"
+                minLength={8}
                 required
+                disabled={isSubmitting}
                 className={inputClassName}
               />
             </div>
@@ -273,32 +348,52 @@ export const Signup: React.FC = () => {
                 value={confirmPassword}
                 onChange={(e) => {
                   const nextConfirmPassword = e.target.value;
+
                   setConfirmPassword(nextConfirmPassword);
                   setAuthError(null);
+
                   setPasswordError(
-                    nextConfirmPassword.length > 0 && nextConfirmPassword !== password
+                    nextConfirmPassword.length > 0 &&
+                      nextConfirmPassword !== password
                       ? 'Passwords do not match.'
-                      : null
+                      : password.length > 0 && password.length < 8
+                        ? 'Password must contain at least 8 characters.'
+                        : null
                   );
                 }}
                 placeholder="Re-enter your password"
                 autoComplete="new-password"
                 required
+                disabled={isSubmitting}
                 aria-invalid={Boolean(passwordError)}
-                aria-describedby={passwordError ? 'signup-password-error' : undefined}
-                className={`${inputClassName} ${passwordError ? 'border-white/50' : ''}`}
+                aria-describedby={
+                  passwordError
+                    ? 'signup-password-error'
+                    : undefined
+                }
+                className={`${inputClassName} ${
+                  passwordError ? 'border-white/50' : ''
+                }`}
               />
             </div>
 
             {passwordError && (
-              <p id="signup-password-error" role="alert" className="mt-1.5 text-xs text-gray-300">
+              <p
+                id="signup-password-error"
+                role="alert"
+                className="mt-1.5 text-xs text-gray-300"
+              >
                 {passwordError}
               </p>
             )}
 
-            {!passwordError && confirmPassword.length > 0 && password === confirmPassword && (
-              <p className="mt-1.5 text-xs text-gray-400">Passwords match.</p>
-            )}
+            {!passwordError &&
+              confirmPassword.length > 0 &&
+              password === confirmPassword && (
+                <p className="mt-1.5 text-xs text-gray-400">
+                  Passwords match.
+                </p>
+              )}
           </div>
 
           {/* CREATE ACCOUNT */}
@@ -364,7 +459,6 @@ export const Signup: React.FC = () => {
               Sign In
             </Link>
           </div>
-
         </form>
       </div>
     </AuthLayout>

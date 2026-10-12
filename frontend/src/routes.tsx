@@ -1,6 +1,10 @@
-
 import React from 'react';
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import {
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+} from 'react-router-dom';
 
 import { Home } from './pages/Home';
 import { Login } from './pages/Login';
@@ -10,6 +14,7 @@ import { Tasks } from './pages/Tasks';
 import { Files } from './pages/Files';
 import { Analytics } from './pages/Analytics';
 import { Settings } from './pages/Settings';
+
 import { useAuth } from './context/AuthContext';
 
 interface ProtectedRouteProps {
@@ -21,25 +26,46 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   children,
   allowDevBypass = false,
 }) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const location = useLocation();
 
-  // Development-only bypass for direct Workspace testing.
   const devWorkspaceBypass =
     allowDevBypass &&
+    import.meta.env.DEV &&
     import.meta.env.VITE_DEV_WORKSPACE_BYPASS === 'true';
 
-  if (isAuthenticated || devWorkspaceBypass) {
+  // Allow the explicitly configured development bypass.
+  if (devWorkspaceBypass) {
     return children;
   }
 
-  return (
-    <Navigate
-      to="/login"
-      replace
-      state={{ from: location.pathname }}
-    />
-  );
+  // Wait until Supabase session restoration has completed.
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#090909] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+
+          <p className="text-sm text-gray-400">
+            Restoring your TCO session...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Redirect only after the authentication check has completed.
+  if (!isAuthenticated) {
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{ from: { pathname: location.pathname } }}
+      />
+    );
+  }
+
+  return children;
 };
 
 export const AppRoutes: React.FC = () => {

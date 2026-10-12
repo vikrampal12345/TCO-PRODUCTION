@@ -1,29 +1,77 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import {
+  Link,
+  useNavigate,
+  useLocation,
+} from 'react-router-dom';
+
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { useAuth } from '../context/AuthContext';
-import { ArrowRight, Loader2, Lock, Mail } from 'lucide-react';
+
+import {
+  ArrowRight,
+  Loader2,
+  Lock,
+  Mail,
+} from 'lucide-react';
+
 import { errorMessage } from '../services/http';
+
+interface LoginLocationState {
+  message?: string;
+  from?: {
+    pathname?: string;
+  };
+}
 
 export const Login: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+
   const [authError, setAuthError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [loadingText, setLoadingText] = useState('Signing you into TCO...');
-  const { login, loginWithGoogle } = useAuth();
-  const navigate = useNavigate();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const [loadingText, setLoadingText] = useState(
+    'Signing you into TCO...'
+  );
+
+  const { login, loginWithGoogle } = useAuth();
+
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const locationState =
+    (location.state as LoginLocationState | null) ?? null;
+
+  const confirmationMessage = locationState?.message;
+
+  const handleSubmit = async (
+    e: React.FormEvent<HTMLFormElement>
+  ) => {
     e.preventDefault();
-    if (!email) return;
+
+    setAuthError(null);
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!normalizedEmail || !password) {
+      setAuthError('Please enter your email and password.');
+      return;
+    }
 
     setIsSubmitting(true);
-    setAuthError(null);
     setLoadingText('Signing you into TCO...');
+
     try {
-      await login({ email, password });
-      navigate('/workspace');
+      await login({
+        email: normalizedEmail,
+        password,
+      });
+
+      const destination =
+        locationState?.from?.pathname || '/workspace';
+
+      navigate(destination, { replace: true });
     } catch (error) {
       setAuthError(errorMessage(error));
     } finally {
@@ -32,15 +80,19 @@ export const Login: React.FC = () => {
   };
 
   const handleGoogleLogin = async () => {
-    setIsSubmitting(true);
     setAuthError(null);
+    setIsSubmitting(true);
     setLoadingText('Authenticating with Google...');
+
     try {
       await loginWithGoogle();
-      navigate('/workspace');
+
+      /*
+       * Supabase OAuth redirects the browser to Google.
+       * Do not navigate manually here.
+       */
     } catch (error) {
       setAuthError(errorMessage(error));
-    } finally {
       setIsSubmitting(false);
     }
   };
@@ -52,36 +104,111 @@ export const Login: React.FC = () => {
     >
       {/* Loading Overlay */}
       {isSubmitting && (
-        <div className="absolute inset-0 bg-[#090909]/90 backdrop-blur-md rounded-2xl flex flex-col items-center justify-center z-20 space-y-3">
+        <div
+          className="
+            absolute
+            inset-0
+            bg-[#090909]/90
+            backdrop-blur-md
+            rounded-2xl
+            flex
+            flex-col
+            items-center
+            justify-center
+            z-20
+            space-y-3
+          "
+        >
           <Loader2 className="w-8 h-8 text-white animate-spin" />
+
           <div className="text-sm font-semibold text-white">
             {loadingText}
           </div>
+
           <div className="text-xs text-gray-500">
             Loading your active academic sessions...
           </div>
         </div>
       )}
 
-      {authError && <div role="alert" className="mb-4 rounded-xl border border-white/15 bg-white/[0.05] px-3 py-2.5 text-xs text-gray-200">{authError}</div>}
+      {/* Email Confirmation Message */}
+      {confirmationMessage && (
+        <div
+          role="status"
+          className="
+            mb-4
+            rounded-xl
+            border
+            border-white/15
+            bg-white/[0.05]
+            px-3
+            py-2.5
+            text-xs
+            text-gray-200
+          "
+        >
+          {confirmationMessage}
+        </div>
+      )}
+
+      {/* Authentication Error */}
+      {authError && (
+        <div
+          role="alert"
+          className="
+            mb-4
+            rounded-xl
+            border
+            border-white/15
+            bg-white/[0.05]
+            px-3
+            py-2.5
+            text-xs
+            text-gray-200
+          "
+        >
+          {authError}
+        </div>
+      )}
+
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Email Field */}
         <div>
-          <label className="block text-xs font-medium text-gray-300 mb-1.5">
+          <label
+            htmlFor="login-email"
+            className="block text-xs font-medium text-gray-300 mb-1.5"
+          >
             Email
           </label>
 
           <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-500">
+            <div
+              className="
+                absolute
+                inset-y-0
+                left-0
+                pl-3.5
+                flex
+                items-center
+                pointer-events-none
+                text-gray-500
+              "
+            >
               <Mail className="w-4 h-4" />
             </div>
 
             <input
+              id="login-email"
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setAuthError(null);
+              }}
               placeholder="prof.name@university.edu"
+              autoComplete="email"
               required
+              disabled={isSubmitting}
               className="
                 w-full
                 pl-10
@@ -107,29 +234,54 @@ export const Login: React.FC = () => {
         {/* Password Field */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="block text-xs font-medium text-gray-300">
+            <label
+              htmlFor="login-password"
+              className="block text-xs font-medium text-gray-300"
+            >
               Password
             </label>
 
-            <a
-              href="#forgot"
-              className="text-xs text-gray-400 hover:text-white transition-colors"
+            <Link
+              to="/forgot-password"
+              className="
+                text-xs
+                text-gray-400
+                hover:text-white
+                transition-colors
+              "
             >
               Forgot password?
-            </a>
+            </Link>
           </div>
 
           <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-500">
+            <div
+              className="
+                absolute
+                inset-y-0
+                left-0
+                pl-3.5
+                flex
+                items-center
+                pointer-events-none
+                text-gray-500
+              "
+            >
               <Lock className="w-4 h-4" />
             </div>
 
             <input
+              id="login-password"
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setAuthError(null);
+              }}
               placeholder="••••••••"
+              autoComplete="current-password"
               required
+              disabled={isSubmitting}
               className="
                 w-full
                 pl-10
@@ -177,9 +329,20 @@ export const Login: React.FC = () => {
             disabled:cursor-not-allowed
           "
         >
-          <span>Sign In</span>
+          <span>
+            {isSubmitting ? 'Signing In...' : 'Sign In'}
+          </span>
 
-          <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+          {!isSubmitting && (
+            <ArrowRight
+              className="
+                w-4
+                h-4
+                transition-transform
+                group-hover:translate-x-1
+              "
+            />
+          )}
         </button>
 
         {/* Divider */}
@@ -220,8 +383,11 @@ export const Login: React.FC = () => {
             disabled:opacity-50
           "
         >
-          {/* Google icon — ORIGINAL COLORS PRESERVED */}
-          <svg className="w-4 h-4" viewBox="0 0 24 24">
+          <svg
+            className="w-4 h-4"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
             <path
               fill="#4285F4"
               d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
