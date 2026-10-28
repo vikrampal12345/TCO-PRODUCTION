@@ -5,6 +5,8 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from backend.core.tool_result import ToolResult
 from backend.services.result_store import ResultStore
 from backend.services.result_email_service import ResultEmailService
@@ -120,6 +122,100 @@ def create_test_database():
     )
 
     return test_db, temp_dir
+
+
+@pytest.fixture
+def result_store(tmp_path: Path) -> ResultStore:
+    """Provide an isolated store with the controlled email-test records."""
+    test_db = tmp_path / "tco_result_email.db"
+    shutil.copy2(SOURCE_DB, test_db)
+    store = ResultStore(db_path=test_db)
+
+    with sqlite3.connect(test_db) as connection:
+        connection.execute(
+            """
+            INSERT INTO students (
+                student_no, university_roll, name, email,
+                class_level, section, school_id,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "GMAIL_TEST_001",
+                "GMAIL_TEST_001",
+                "Controlled Result Email Student",
+                "electrofact3@gmail.com",
+                "TCO Test Class",
+                "TEST",
+                "TCO_TEST",
+                "2026-10-05T00:00:00Z",
+                "2026-10-05T00:00:00Z",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO assessments (
+                title, subject, topic, class_level, section,
+                total_marks, question_count, generation_mode,
+                status, created_by, school_id,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "Result Email Integration Assessment",
+                "Computer Science",
+                "Booth Algorithm",
+                "TCO Test Class",
+                "TEST",
+                5,
+                2,
+                "test_fixture",
+                "published",
+                "TCO_TEST_TEACHER",
+                "TCO_TEST",
+                "2026-10-05T00:00:00Z",
+                "2026-10-05T00:00:00Z",
+            ),
+        )
+        connection.commit()
+
+    return store
+
+
+@pytest.fixture
+def student_id(result_store: ResultStore) -> int:
+    with sqlite3.connect(result_store.db_path) as connection:
+        row = connection.execute(
+            "SELECT id FROM students WHERE student_no = ?",
+            ("GMAIL_TEST_001",),
+        ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+@pytest.fixture
+def assessment_id(result_store: ResultStore) -> int:
+    with sqlite3.connect(result_store.db_path) as connection:
+        row = connection.execute(
+            "SELECT id FROM assessments WHERE title = ?",
+            ("Result Email Integration Assessment",),
+        ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+@pytest.fixture
+def result_id(
+    result_store: ResultStore,
+    student_id: int,
+    assessment_id: int,
+) -> int:
+    saved = create_test_result(
+        result_store,
+        student_id=student_id,
+        assessment_id=assessment_id,
+    )
+    return int(saved["result_id"])
 
 
 # ============================================================
@@ -460,6 +556,11 @@ def test_duplicate_protection(
     service = ResultEmailService(
         result_store=result_store,
         gmail_tool=gmail_tool,
+    )
+
+    result_store.update_result_email_status(
+        result_id=result_id,
+        status="sent",
     )
 
     outcome = service.send_result(

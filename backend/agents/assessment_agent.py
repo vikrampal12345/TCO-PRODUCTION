@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -6,6 +7,31 @@ from backend.core.base_agent import BaseAgent
 from backend.core.model_provider import get_chat_model
 from backend.core.task import Task
 from backend.state import TCOState
+
+
+logger = logging.getLogger(__name__)
+MAX_RETRIEVED_CONTEXT_CHARACTERS = 12000
+
+
+def _bound_retrieved_context(context: str) -> str:
+    """Keep grounded source blocks within the configured model budget."""
+    if len(context) <= MAX_RETRIEVED_CONTEXT_CHARACTERS:
+        return context
+
+    blocks = context.split("\n\n")
+    bounded: list[str] = []
+    remaining = MAX_RETRIEVED_CONTEXT_CHARACTERS
+    for block in blocks:
+        if remaining <= 0:
+            break
+        separator = "\n\n" if bounded else ""
+        available = remaining - len(separator)
+        if available <= 0:
+            break
+        bounded.append(block[:available])
+        remaining -= len(separator) + min(len(block), available)
+
+    return "\n\n".join(bounded).rstrip()
 
 
 # ============================================================
@@ -333,6 +359,13 @@ class AssessmentAgent(BaseAgent):
             )
             or ""
         ).strip()
+        original_context_length = len(retrieved_context)
+        retrieved_context = _bound_retrieved_context(retrieved_context)
+        logger.info(
+            "Assessment grounded context bounded: original_chars=%d bounded_chars=%d",
+            original_context_length,
+            len(retrieved_context),
+        )
 
         source_references = list(
             state.get(
@@ -532,6 +565,11 @@ Every question carries exactly
 
 Return only the structured assessment.
 """
+        logger.info(
+            "Assessment generation prompt prepared: prompt_chars=%d context_chars=%d",
+            len(generation_prompt),
+            len(retrieved_context),
+        )
 
         # ----------------------------------------------------
         # LLM generation
@@ -563,20 +601,77 @@ Return only the structured assessment.
             expected_question_count=question_count,
         )
 
+        # One automatic repair attempt when the model output
+        # fails deterministic structural validation.
         if not validation["valid"]:
+            logger.warning(
+                "Assessment structure invalid; attempting one repair. Errors: %s",
+                validation.get("errors", []),
+            )
+
+            try:
+                repair_prompt = (
+                    generation_prompt
+                    + "\\n\\nSTRUCTURAL VALIDATION REPAIR REQUIRED.\\n"
+                    + "Your previous assessment failed these structural checks:\\n"
+                    + "\\n".join(
+                        f"- {error}"
+                        for error in validation.get("errors", [])
+                    )
+                    + "\\nRegenerate the COMPLETE assessment. "
+                    "Correct every listed issue. Return exactly the required "
+                    "number of questions, exactly four non-empty distinct "
+                    "options per question, a valid correct_option from 1 to 4, "
+                    "non-empty question text, and the required structured format. "
+                    "Return only the corrected structured assessment."
+                )
+
+                repaired_assessment: MCQAssessment = self.model.invoke(
+                    repair_prompt
+                )
+                repaired_validation = self._validate_assessment(
+                    assessment=repaired_assessment,
+                    expected_question_count=question_count,
+                )
+
+                if repaired_validation["valid"]:
+                    assessment = repaired_assessment
+                    validation = repaired_validation
+                    logger.info(
+                        "Assessment passed structural validation after repair."
+                    )
+                else:
+                    validation = repaired_validation
+                    logger.error(
+                        "Automatic assessment repair still failed: %s",
+                        validation.get("errors", []),
+                    )
+
+            except Exception as repair_exc:
+                logger.exception("Automatic assessment repair attempt failed.")
+                validation = {
+                    **validation,
+                    "errors": list(validation.get("errors", []))
+                    + [f"Automatic repair attempt failed: {repair_exc}"],
+                }
+
+        if not validation["valid"]:
+            validation_errors = validation.get("errors", [])
+            logger.error(
+                "Assessment structural validation failed: %s",
+                validation_errors,
+            )
 
             return {
                 **state,
                 "status": "error",
-                "error_code": (
-                    "ASSESSMENT_VALIDATION_FAILED"
-                ),
+                "error_code": "ASSESSMENT_VALIDATION_FAILED",
                 "error_message": (
-                    "Generated assessment failed "
-                    "structural validation."
+                    "Generated assessment failed structural validation. "
+                    + " ".join(validation_errors)
                 ),
                 "validation_status": "failed",
-                "validation_errors": validation["errors"],
+                "validation_errors": validation_errors,
             }
 
         # ----------------------------------------------------

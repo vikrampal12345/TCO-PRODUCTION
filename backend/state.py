@@ -229,3 +229,18 @@ class TCOState(
     web_source_content_path: str
 
     knowledge_source: str
+    # ========================================================
+    # COPY CHECKING FILE CONTEXT (internal paths only)
+    # ========================================================
+
+    question_paper_path: str
+    marking_scheme_path: str
+    answer_sheet_path: str
+    student_number: str
+    assessment_id: str
+    page_limit: int
+    job_id: str
+    output_dir: str
+    checked_copy_path: str
+    copy_checking_result: dict[str, Any]
+    aggregated_submission: dict[str, Any]

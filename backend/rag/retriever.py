@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 from backend.rag.vectorstore import collection, embedding_model
 
 
 DEFAULT_TOP_K = 5
 DEFAULT_SIMILARITY_THRESHOLD = 0.30
+MAX_RETRIEVED_CONTEXT_CHARACTERS = 12000
+
+logger = logging.getLogger(__name__)
 
 
 class RetrieverError(Exception):
@@ -286,6 +290,7 @@ def retrieve_context(
         return ""
 
     context_parts: list[str] = []
+    total_characters = 0
 
     for index, result in enumerate(results, start=1):
         metadata = result.get("metadata", {})
@@ -302,10 +307,27 @@ def retrieve_context(
         if page is not None:
             source_label += f", page {page}"
 
-        context_parts.append(
+        block = (
             f"[Source {index}: {source_label}]\n"
             f"{result['text']}"
         )
+        separator_length = 2 if context_parts else 0
+        remaining = (
+            MAX_RETRIEVED_CONTEXT_CHARACTERS
+            - total_characters
+            - separator_length
+        )
+        if remaining <= 0:
+            break
+        context_parts.append(block[:remaining])
+        total_characters += separator_length + min(len(block), remaining)
+
+    logger.info(
+        "RAG context assembled: chunks=%d chars=%d query_chars=%d",
+        len(context_parts),
+        total_characters,
+        len(query),
+    )
 
     return "\n\n".join(context_parts)
 

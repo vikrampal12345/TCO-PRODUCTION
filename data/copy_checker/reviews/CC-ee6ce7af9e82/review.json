@@ -1,0 +1,564 @@
+{
+  "job_id": "CC-ee6ce7af9e82",
+  "status": "review_required",
+  "grading_started": false,
+  "student_number": "Student_19",
+  "required_capability": "copy_checking.grade",
+  "page_limit": 4,
+  "created_at": "2026-10-21T20:11:42.910497+00:00",
+  "reason": "The extracted answers need teacher review before grading can continue.",
+  "aggregated_submission": {
+    "job_id": "CC-ee6ce7af9e82",
+    "student_number": "Student_19",
+    "total_pages": 4,
+    "processed_pages": 4,
+    "answers": [
+      {
+        "question_no": 1,
+        "answer": "A",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 1,
+            "answer": "A",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 2,
+        "answer": "C",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 2,
+            "answer": "C",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 3,
+        "answer": "A",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 3,
+            "answer": "A",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 4,
+        "answer": "A",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 4,
+            "answer": "A",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 5,
+        "answer": "A",
+        "confidence": 0.98,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 5,
+            "answer": "A",
+            "confidence": 0.98,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 6,
+        "answer": "A",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 6,
+            "answer": "A",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 7,
+        "answer": "D",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 7,
+            "answer": "D",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 8,
+        "answer": "A",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 8,
+            "answer": "A",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 9,
+        "answer": "D",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 9,
+            "answer": "D",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 10,
+        "answer": "D",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 10,
+            "answer": "D",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 11,
+        "answer": "B",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 11,
+            "answer": "B",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 12,
+        "answer": "B",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 12,
+            "answer": "B",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 13,
+        "answer": "C",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 13,
+            "answer": "C",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 14,
+        "answer": "B",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 14,
+            "answer": "B",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 15,
+        "answer": "B",
+        "confidence": 0.98,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 15,
+            "answer": "B",
+            "confidence": 0.98,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 16,
+        "answer": "B",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 16,
+            "answer": "B",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 17,
+        "answer": "C",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 17,
+            "answer": "C",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 18,
+        "answer": "A",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 18,
+            "answer": "A",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 19,
+        "answer": "A",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 19,
+            "answer": "A",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 20,
+        "answer": "A",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 20,
+            "answer": "A",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      },
+      {
+        "question_no": 24,
+        "answer": "Elucidate any two challenges of Machine Learning?\n1. Challenges of Machine Learning is hard to used python code and numpy array.\n2. The challenge of Machine Learning is difficult to understand all the algorithm, and some algorithms of the algorithm are two similar.",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 24,
+            "answer": "Elucidate any two challenges of Machine Learning?\n1. Challenges of Machine Learning is hard to used python code and numpy array.\n2. The challenge of Machine Learning is difficult to understand all the algorithm, and some algorithms of the algorithm are two similar.",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          },
+          {
+            "page_no": 4,
+            "question_no": 24,
+            "answer": "The answer to question number 24 is: [UNCLEAR] The student's handwriting is too unclear to read.",
+            "confidence": 0.9,
+            "source_tile": "page_004",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "REVIEW_REQUIRED",
+        "review_required": true,
+        "warning": "Multiple extracted observations for this question are inconsistent."
+      },
+      {
+        "question_no": 25,
+        "answer": "Name: Hong Sovantiry\nID: 1101901025",
+        "confidence": 0.98,
+        "observations": [
+          {
+            "page_no": 2,
+            "question_no": 25,
+            "answer": "Chatboard: Auto reply AI.\nFood recommend.",
+            "confidence": 0.95,
+            "source_tile": "page_002",
+            "status": "EXTRACTED",
+            "warning": null
+          },
+          {
+            "page_no": 3,
+            "question_no": 25,
+            "answer": "Name: Hong Sovantiry\nID: 1101901025",
+            "confidence": 0.98,
+            "source_tile": "page_003",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "REVIEW_REQUIRED",
+        "review_required": true,
+        "warning": "Multiple extracted observations for this question are inconsistent."
+      },
+      {
+        "question_no": 29,
+        "answer": "Why data normalization is required in K-NN?\n-> Because in K-NN Data cannot normalize by itself like k-mean.",
+        "confidence": 0.95,
+        "observations": [
+          {
+            "page_no": 1,
+            "question_no": 29,
+            "answer": "Why data normalization is required in K-NN?\n-> Because in K-NN Data cannot normalize by itself like k-mean.",
+            "confidence": 0.95,
+            "source_tile": "page_001",
+            "status": "EXTRACTED",
+            "warning": null
+          }
+        ],
+        "status": "EXTRACTED",
+        "review_required": false,
+        "warning": null
+      }
+    ],
+    "expected_questions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35
+    ],
+    "missing_questions": [
+      21,
+      22,
+      23,
+      26,
+      27,
+      28,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35
+    ],
+    "repeated_questions": [
+      24,
+      25
+    ],
+    "conflicting_questions": [
+      24,
+      25
+    ],
+    "unresolved_items": 0,
+    "review_required": true,
+    "warnings": [
+      "Missing expected questions: 21, 22, 23, 26, 27, 28, 30, 31, 32, 33, 34, 35",
+      "Repeated question numbers detected: 24, 25",
+      "Conflicting observations detected for questions: 24, 25",
+      "Teacher approval is required before grading."
+    ],
+    "metadata": {
+      "workflow": "in_memory_grading",
+      "question_paper_provided": true,
+      "marking_scheme_status": "locked",
+      "verification": "disabled_for_demo",
+      "grading_review": "disabled_for_demo",
+      "page_limit": 4,
+      "teacher_approval_required": true,
+      "pages_in_current_test": 4,
+      "actual_pdf_pages": 4,
+      "pages_processed": 4,
+      "partial_copy_processing": false
+    }
+  },
+  "input_filenames": {
+    "question_paper": "Question.txt",
+    "marking_scheme": "answerkey.txt",
+    "answer_copy": "Student_19.pdf"
+  },
+  "retained_inputs": {
+    "question_paper": "inputs\\question_paper.txt",
+    "marking_scheme": "inputs\\marking_scheme.txt",
+    "answer_copy": "inputs\\answer_copy.pdf"
+  },
+  "next_step": "Review the incomplete extraction. Do not publish marks until the complete answer sheet has been checked."
+}

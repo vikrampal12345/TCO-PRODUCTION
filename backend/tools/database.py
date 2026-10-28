@@ -642,10 +642,17 @@ class DatabaseTool(BaseTool):
 
         students = result.data or []
 
+        def _is_valid_email_for_delivery(value):
+            address = str(value or '').strip()
+            if address.count('@') != 1 or any(c.isspace() for c in address):
+                return False
+            local, domain = address.split('@', 1)
+            return bool(local and '.' in domain and not domain.startswith('.') and not domain.endswith('.'))
+
         emails = [
-            student["email"]
+            str(student.get('email') or '').strip()
             for student in students
-            if student.get("email")
+            if _is_valid_email_for_delivery(student.get('email'))
         ]
 
         return ToolResult.ok(

@@ -1,0 +1,1879 @@
+
+========== .\frontend\src\services\fastApiService.ts ==========
+
+
+import type { ChatMessage, Conversation } from '../types/chat';
+import type { WorkflowProgress, WorkflowType } from '../types/workflow';
+import type { ITCOApiService, WorkspaceSourceMode } from './api';
+import { apiRequest } from './http';
+
+type RecordLike = Record<string, any>;
+
+type MessageAttachmentInput = {
+  name: string;
+  size: string;
+  type: string;
+  file?: File;
+};
+
+const STORAGE_KEY = 'tco.fastapi.workspace.conversations.v1';
+
+const object = (value: unknown): RecordLike =>
+  value && typeof value === 'object'
+    ? value as RecordLike
+    : {};
+
+const first = (...values: any[]) =>
+  values.find((value) => value !== undefined && value !== null);
+
+const encoded = (value: string) => encodeURIComponent(value);
+
+const jsonPost = (value: unknown): RequestInit => ({
+  method: 'POST',
+  body: JSON.stringify(value),
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+function createId(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+
+  return `tco-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getTeacherId(): string {
+  try {
+    return (
+      localStorage.getItem('tco.teacher_id') ||
+      import.meta.env.VITE_TCO_TEACHER_ID ||
+      'teacher-001'
+    );
+  } catch {
+    return import.meta.env.VITE_TCO_TEACHER_ID || 'teacher-001';
+  }
+}
+
+function getSchoolId(): string {
+  return import.meta.env.VITE_TCO_SCHOOL_ID || 'school-001';
+}
+
+function readStoredConversations(): Conversation[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (!stored) return [];
+
+    const parsed: unknown = JSON.parse(stored);
+
+    return Array.isArray(parsed)
+      ? parsed.map(normalizeConversation)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredConversations(
+  conversations: Conversation[],
+): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(conversations),
+    );
+  } catch (error) {
+    console.error('Could not save local workspace history:', error);
+  }
+}
+
+function normalizeWorkflow(raw: unknown): WorkflowProgress | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+
+  const value = object(raw);
+  const stepsRaw = first(value.steps, value.workflow_steps, []);
+  const rawState = first(value.state, value.status, 'running');
+
+  return {
+    workflowId: String(
+      first(value.workflowId, value.workflow_id, value.id, 'wf-active'),
+    ),
+    type: first(
+      value.type,
+      value.workflow_type,
+      value.intent,
+      'assessment',
+    ) as WorkflowType,
+    state: String(rawState).toLowerCase().replace(/ /g, '_') as
+      WorkflowProgress['state'],
+    activeAgent: first(
+      value.activeAgent,
+      value.active_agent,
+      'TCO Master Agent',
+    ),
+    steps: Array.isArray(stepsRaw)
+      ? stepsRaw.map((rawStep: unknown, index: number) => {
+          const step = object(rawStep);
+
+          return {
+            id: String(first(step.id, `step-${index + 1}`)),
+            agent: first(step.agent, step.agent_name, 'TCO Master Agent'),
+            label: String(first(step.label, step.name, `Step ${index + 1}`)),
+            description: String(first(step.description, '')),
+            status: first(step.status, 'pending'),
+            timestamp: first(step.timestamp, step.created_at),
+          };
+        })
+      : [],
+    clarification: first(
+      value.clarification,
+      value.clarification_request,
+    ),
+    approval: first(value.approval, value.approval_request),
+    resultSummary: first(
+      value.resultSummary,
+      value.result_summary,
+    ),
+  } as WorkflowProgress;
+}
+
+function normalizeMessage(
+  raw: unknown,
+  fallbackSender: 'teacher' | 'tco' = 'tco',
+): ChatMessage {
+  const value = object(raw);
+
+  const rawSender = String(
+    first(value.sender, value.role, value.sender_role, fallbackSender),
+  ).toLowerCase();
+
+  return {
+    id: String(
+      first(value.id, value.message_id, `msg-${Date.now()}`),
+    ),
+    sender: ['teacher', 'user', 'human'].includes(rawSender)
+      ? 'teacher'
+      : 'tco',
+    timestamp: String(
+      first(
+        value.timestamp,
+        value.created_at,
+        value.time,
+        new Date().toISOString(),
+      ),
+    ),
+    content: String(
+      first(value.content, value.text, value.message, ''),
+    ),
+    workflowProgress: normalizeWorkflow(
+      first(
+        value.workflowProgress,
+        value.workflow_progress,
+        value.workflow,
+      ),
+    ),
+    clarification: first(
+      value.clarification,
+      value.clarification_request,
+    ),
+    approval: first(value.approval, value.approval_request),
+    attachments: Array.isArray(value.attachments)
+      ? value.attachments.map(
+          (rawAttachment: unknown, index: number) => {
+            const attachment = object(rawAttachment);
+
+            return {
+              id: String(first(attachment.id, `att-${index + 1}`)),
+              name: String(
+                first(attachment.name, attachment.filename, 'Attachment'),
+              ),
+              size: String(first(attachment.size, '')),
+              type: String(
+                first(
+                  attachment.type,
+                  attachment.content_type,
+                  'application/octet-stream',
+                ),
+              ),
+            };
+          },
+        )
+      : undefined,
+    reviewType: first(value.reviewType, value.review_type),
+    reviewDataId: first(
+      value.reviewDataId,
+      value.review_data_id,
+      value.review_id,
+    ),
+  } as ChatMessage;
+}
+
+function normalizeConversation(raw: unknown): Conversation {
+  const value = object(raw);
+  const rawMessages = first(value.messages, value.history, []);
+
+  return {
+    id: String(first(value.id, value.conversation_id, value.thread_id, '')),
+    title: String(first(value.title, value.name, 'New Conversation')),
+    status: first(value.status, 'Draft'),
+    group: first(value.group, 'Today'),
+    lastUpdated: String(
+      first(
+        value.lastUpdated,
+        value.last_updated,
+        value.updated_at,
+        value.created_at,
+        new Date().toISOString(),
+      ),
+    ),
+    preview: String(
+      first(value.preview, value.last_message, value.summary, ''),
+    ),
+    messages: Array.isArray(rawMessages)
+      ? rawMessages.map((message: unknown) => normalizeMessage(message))
+      : [],
+    activeWorkflowType: first(
+      value.activeWorkflowType,
+      value.active_workflow_type,
+    ),
+  } as Conversation;
+}
+
+function updateConversationMessages(
+  conversationId: string,
+  userMessage: ChatMessage,
+  tcoMessage: ChatMessage,
+  titleFromMessage: string,
+): void {
+  const conversations = readStoredConversations();
+  const index = conversations.findIndex(
+    (conversation) => conversation.id === conversationId,
+  );
+
+  const now = new Date().toISOString();
+
+  if (index === -1) {
+    const newConversation = normalizeConversation({
+      id: conversationId,
+      title: titleFromMessage.slice(0, 60) || 'New Conversation',
+      status: 'Running',
+      group: 'Today',
+      lastUpdated: now,
+      preview: tcoMessage.content,
+      messages: [userMessage, tcoMessage],
+      activeWorkflowType: tcoMessage.workflowProgress?.type,
+    });
+
+    saveStoredConversations([newConversation, ...conversations]);
+    return;
+  }
+
+  const current = conversations[index];
+
+  conversations[index] = {
+    ...current,
+    status: 'Running',
+    lastUpdated: now,
+    preview: tcoMessage.content,
+    messages: [
+      ...(current.messages || []),
+      userMessage,
+      tcoMessage,
+    ],
+    activeWorkflowType:
+      tcoMessage.workflowProgress?.type ||
+      current.activeWorkflowType,
+  } as Conversation;
+
+  saveStoredConversations(conversations);
+}
+
+function updateStoredWorkflow(
+  conversationId: string,
+  workflowId: string,
+  newState: string,
+  approval: unknown,
+): void {
+  const conversations = readStoredConversations();
+
+  const updated = conversations.map((conversation) => {
+    if (conversation.id !== conversationId) return conversation;
+
+    return {
+      ...conversation,
+      lastUpdated: new Date().toISOString(),
+      messages: (conversation.messages || []).map((message) => {
+        if (
+          message.workflowProgress?.workflowId !== workflowId
+        ) {
+          return message;
+        }
+
+        return {
+          ...message,
+          approval,
+          workflowProgress: {
+            ...message.workflowProgress,
+            state: newState as WorkflowProgress['state'],
+            approval,
+          },
+        };
+      }),
+    } as Conversation;
+  });
+
+  saveStoredConversations(updated);
+}
+
+
+function mapWorkspaceResponse(
+  rawResponse: unknown,
+  content: string,
+) {
+  const payload = object(rawResponse);
+  const metadata = object(payload.metadata);
+  const decision = object(metadata.master_decision);
+  const result = object(payload.result);
+  const task = object(payload.current_task);
+  const taskResult = object(task.result);
+
+  const requestId = String(first(payload.request_id, createId()));
+  const intent = String(first(payload.intent, decision.intent, "general"));
+  const status = String(first(payload.status, "completed"));
+  const nextAction = String(first(payload.next_action, ""));
+  const clarification = String(first(payload.clarification_message, ""));
+
+  const missingInformation = Array.isArray(payload.missing_information)
+    ? payload.missing_information.map(String)
+    : [];
+
+  const questions = Array.isArray(payload.questions)
+    ? payload.questions
+    : Array.isArray(result.questions)
+      ? result.questions
+      : Array.isArray(taskResult.questions)
+        ? taskResult.questions
+        : [];
+
+  const analyticsResult = first(
+    payload.analytics_result,
+    result.analytics_result,
+    taskResult.analytics_result,
+  );
+
+  const evaluationResult = first(
+    payload.evaluation_result,
+    payload.evaluation_results,
+    result.evaluation_result,
+    taskResult.evaluation_result,
+  );
+
+  const copyCheckingResult = first(
+    payload.copy_checking_result,
+    result.copy_checking_result,
+    taskResult.copy_checking_result,
+  );
+
+  const displayValue = (value: unknown): string => {
+    if (typeof value === "string") return value;
+    try {
+      return JSON.stringify(value, null, 2) ?? String(value);
+    } catch {
+      return String(value);
+    }
+  };
+
+  let reply: string;
+
+  if (nextAction === "ask_teacher" || status === "waiting_for_teacher") {
+    reply =
+      clarification ||
+      (missingInformation.length
+        ? `Please provide: ${missingInformation.join(", ")}.`
+        : "I need some additional information before continuing.");
+  } else if (
+    status === "error" ||
+    status.endsWith("_failed") ||
+    payload.error_message
+  ) {
+    reply = String(
+      first(payload.error_message, "TCO could not complete this request."),
+    );
+  } else if (questions.length > 0) {
+    const formattedQuestions = questions.map(
+      (rawQuestion: unknown, index: number) => {
+        if (typeof rawQuestion === "string") {
+          return `${index + 1}. ${rawQuestion}`;
+        }
+
+        const question = object(rawQuestion);
+        const number = first(
+          question.question_number,
+          question.number,
+          index + 1,
+        );
+        const text = first(
+          question.question,
+          question.question_text,
+          question.text,
+          question.prompt,
+          displayValue(rawQuestion),
+        );
+        const options = Array.isArray(question.options)
+          ? question.options.map((option: unknown) => String(option)).join("\n   ")
+          : "";
+
+        return `Q${number}. ${String(text)}${options ? `\n   ${options}` : ""}`;
+      },
+    );
+
+    reply = [
+      String(first(payload.assessment_message, "Assessment draft returned by TCO:")),
+      "",
+      ...formattedQuestions,
+    ].join("\n");
+  } else if (analyticsResult != null) {
+    reply = `Analytics result:\n${displayValue(analyticsResult)}`;
+  } else if (evaluationResult != null) {
+    reply = `Evaluation result:\n${displayValue(evaluationResult)}`;
+  } else if (copyCheckingResult != null) {
+    reply = `Copy Checking result:\n${displayValue(copyCheckingResult)}`;
+  } else if (status === "analytics_completed") {
+    reply =
+      "Analytics completed, but no analytics result was included in the API response. Check backend result propagation.";
+  } else {
+    reply = String(
+      first(
+        payload.assessment_message,
+        payload.reply,
+        payload.message,
+        `TCO processed the request. Status: ${status}.`,
+      ),
+    );
+  }
+
+  const userMessage = normalizeMessage(
+    {
+      id: `teacher-${createId()}`,
+      sender: "teacher",
+      content,
+      timestamp: new Date().toISOString(),
+    },
+    "teacher",
+  );
+
+  const tcoMessage = normalizeMessage({
+    id: requestId,
+    sender: "tco",
+    content: reply,
+    timestamp: new Date().toISOString(),
+    workflowProgress: normalizeWorkflow({
+      workflow_id: requestId,
+      intent,
+      state: status,
+      active_agent: first(
+        metadata.executing_provider,
+        metadata.task_provider,
+        task.assigned_to,
+        "TCO Master Agent",
+      ),
+      steps: [],
+      result_summary: first(
+        payload.assessment_message,
+        payload.analytics_result,
+        payload.evaluation_result,
+      ),
+    }),
+  });
+
+  return { userMessage, tcoMessage, requestId };
+}
+
+function createUpdatedWorkflow(
+  workflowId: string,
+  reviewType: WorkflowType,
+  state: string,
+): WorkflowProgress {
+  return {
+    workflowId,
+    type: reviewType,
+    state: state as WorkflowProgress['state'],
+    activeAgent: 'TCO Master Agent',
+    steps: [],
+  } as WorkflowProgress;
+}
+
+export const fastApiService: ITCOApiService = {
+  async getConversations() {
+    // The current FastAPI backend does not expose a conversations-list
+    // endpoint, so conversation history is stored locally in this browser.
+    return readStoredConversations().sort(
+      (a, b) =>
+        new Date(b.lastUpdated).getTime() -
+        new Date(a.lastUpdated).getTime(),
+    );
+  },
+
+  async getConversation(id) {
+    return readStoredConversations().find(
+      (conversation) => conversation.id === id,
+    ) || null;
+  },
+
+  async createConversation(
+    initialTitle = 'New Conversation',
+    initialMessage = '',
+  ) {
+    const id = createId();
+    const now = new Date().toISOString();
+
+    const messages = initialMessage
+      ? [
+          normalizeMessage({
+            id: createId(),
+            sender: 'teacher',
+            content: initialMessage,
+            timestamp: now,
+          }, 'teacher'),
+        ]
+      : [];
+
+    const conversation = normalizeConversation({
+      id,
+      title: initialTitle || 'New Conversation',
+      status: 'Draft',
+      group: 'Today',
+      lastUpdated: now,
+      preview: initialMessage,
+      messages,
+    });
+
+    saveStoredConversations([
+      conversation,
+      ...readStoredConversations(),
+    ]);
+
+    return conversation;
+  },
+
+  async sendMessage(conversationId, content, attachments, sourceMode: WorkspaceSourceMode = 'general_knowledge') {
+    // The current /workspace/chat endpoint accepts JSON only.
+    // Real file upload must be connected to a separate upload endpoint.
+    if (attachments?.length) {
+      throw new Error(
+        'File upload is not connected to the current FastAPI Workspace API yet. Text messages are supported.',
+      );
+    }
+
+    const response = await apiRequest<unknown>(
+      '/tco/execute',
+      jsonPost({
+        teacher_request: content,
+        request_id: createId(),
+        teacher_id: getTeacherId(),
+        school_id: getSchoolId(),
+        conversation_id: conversationId,
+        source_preference: sourceMode,
+      }),
+    );
+
+    const mapped = mapWorkspaceResponse(response, content);
+
+    updateConversationMessages(
+      conversationId,
+      mapped.userMessage,
+      mapped.tcoMessage,
+      content,
+    );
+
+    return {
+      userMessage: mapped.userMessage,
+      tcoMessage: mapped.tcoMessage,
+    };
+  },
+
+  async respondToClarification(
+    conversationId,
+    optionId,
+    customValue,
+  ) {
+    const responseText = customValue?.trim() || optionId;
+
+    return this.sendMessage(
+      conversationId,
+      responseText,
+    );
+  },
+
+  async approveWorkflow(
+    workflowId,
+    conversationId,
+    reviewType,
+    notes,
+  ) {
+    const response = await apiRequest<unknown>(
+      `/workspace/assessments/${encoded(workflowId)}/approve`,
+      jsonPost({
+        teacher_id: getTeacherId(),
+        comment: notes || '',
+      }),
+    );
+
+    const payload = object(response);
+    const approval = object(payload.approval);
+    const status = String(first(payload.status, 'assessment_approved'));
+
+    updateStoredWorkflow(
+      conversationId,
+      workflowId,
+      'assessment_approved',
+      approval,
+    );
+
+    return {
+      status,
+      updatedWorkflow: createUpdatedWorkflow(
+        workflowId,
+        reviewType,
+        'assessment_approved',
+      ),
+    };
+  },
+
+  async rejectWorkflow(
+    workflowId,
+    conversationId,
+    reason,
+  ) {
+    const response = await apiRequest<unknown>(
+      `/workspace/assessments/${encoded(workflowId)}/reject`,
+      jsonPost({
+        teacher_id: getTeacherId(),
+        feedback: reason || 'Teacher requested changes.',
+      }),
+    );
+
+    const payload = object(response);
+    const status = String(
+      first(payload.status, 'assessment_needs_regeneration'),
+    );
+
+    updateStoredWorkflow(
+      conversationId,
+      workflowId,
+      status,
+      payload.approval,
+    );
+
+    return {
+      status,
+      updatedWorkflow: createUpdatedWorkflow(
+        workflowId,
+        'assessment',
+        status,
+      ),
+    };
+  },
+
+  async requestRevision(
+    workflowId,
+    conversationId,
+    instructions,
+  ) {
+    // The current backend records teacher feedback through the reject
+    // endpoint. It does not automatically regenerate the assessment yet.
+    return this.rejectWorkflow(
+      workflowId,
+      conversationId,
+      instructions,
+    );
+  },
+
+  async getReviewDetails<T>(
+    reviewType: WorkflowType,
+    reviewId: string,
+  ): Promise<T | null> {
+    try {
+      const response = await apiRequest<unknown>(
+        `/workspace/assessments/${encoded(reviewId)}`,
+      );
+
+      const payload = object(response);
+      const assessment = object(payload.assessment);
+      const review = object(payload.review);
+      const approval = object(payload.approval);
+
+      // Keep the backend response while exposing common fields directly
+      // for review panels that expect title/questions/status on one object.
+      return {
+        ...payload,
+        id: reviewId,
+        review_id: reviewId,
+        type: reviewType,
+        title: assessment.title,
+        assessment_title: assessment.title,
+        instructions: assessment.instructions,
+        questions: assessment.questions || [],
+        answer_key: assessment.answer_key || [],
+        marking_scheme: assessment.marking_scheme || [],
+        review,
+        approval,
+      } as T;
+    } catch (error) {
+      if ((error as { status?: number }).status === 404) {
+        return null;
+      }
+
+      throw error;
+    }
+  },
+
+  async renameConversation(conversationId, newTitle) {
+    const conversations = readStoredConversations();
+
+    const updated = conversations.map((conversation) =>
+      conversation.id === conversationId
+        ? { ...conversation, title: newTitle }
+        : conversation,
+    );
+
+    saveStoredConversations(updated);
+
+    return updated.some(
+      (conversation) =>
+        conversation.id === conversationId &&
+        conversation.title === newTitle,
+    );
+  },
+
+  async archiveConversation(conversationId) {
+    const conversations = readStoredConversations();
+
+    const updated = conversations.map((conversation) =>
+      conversation.id === conversationId
+        ? { ...conversation, status: 'Archived' as const }
+        : conversation,
+    );
+
+    saveStoredConversations(updated);
+
+    return updated.some(
+      (conversation) =>
+        conversation.id === conversationId &&
+        conversation.status === 'Archived',
+    );
+  },
+
+  async deleteConversation(conversationId) {
+    saveStoredConversations(
+      readStoredConversations().filter(
+        (conversation) => conversation.id !== conversationId,
+      ),
+    );
+
+    return true;
+  },
+};
+
+
+
+========== .\frontend\src\lib\supabase.ts ==========
+
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+
+const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error('Missing Supabase environment variables.');
+}
+
+export const supabase = createClient(
+  supabaseUrl,
+  supabaseKey
+);
+
+========== .\frontend\src\context\AuthContext.tsx ==========
+
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from 'react';
+
+import type {
+  User,
+  AuthState,
+  LoginCredentials,
+  SignupCredentials,
+  UserRole,
+} from '../types/auth';
+
+import { supabase } from '../lib/supabase';
+import { setAccessToken } from '../services/http';
+
+interface AuthContextType extends AuthState {
+  login: (credentials: LoginCredentials) => Promise<void>;
+  signup: (credentials: SignupCredentials) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
+  logout: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(
+  undefined
+);
+
+function mapSupabaseUser(
+  authUser: {
+    id: string;
+    email?: string;
+    user_metadata?: Record<string, unknown>;
+  }
+): User {
+  const metadata = authUser.user_metadata ?? {};
+
+  const roleValue = metadata.role;
+
+  const role: UserRole =
+    roleValue === 'Educator' || roleValue === 'Administrator'
+      ? roleValue
+      : 'Teacher';
+
+  const email = authUser.email ?? '';
+
+  return {
+    id: authUser.id,
+    name:
+      typeof metadata.full_name === 'string' &&
+      metadata.full_name.trim()
+        ? metadata.full_name
+        : email.split('@')[0] || 'Teacher',
+    email,
+    role,
+    school:
+      typeof metadata.school === 'string'
+        ? metadata.school
+        : 'Academic Institution',
+    avatarUrl:
+      typeof metadata.avatar_url === 'string'
+        ? metadata.avatar_url
+        : undefined,
+  };
+}
+
+export const AuthProvider: React.FC<{
+  children: React.ReactNode;
+}> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const applySession = useCallback(
+    (session: {
+      access_token: string;
+      user: {
+        id: string;
+        email?: string;
+        user_metadata?: Record<string, unknown>;
+      };
+    } | null) => {
+      setAccessToken(session?.access_token ?? null);
+
+      setUser(
+        session?.user
+          ? mapSupabaseUser(session.user)
+          : null
+      );
+    },
+    []
+  );
+
+  useEffect(() => {
+    let mounted = true;
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (!mounted) return;
+
+        applySession(session);
+        setIsLoading(false);
+      }
+    );
+
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (!mounted) return;
+
+        if (error) {
+          console.error(
+            'Unable to restore Supabase session:',
+            error.message
+          );
+
+          applySession(null);
+        } else {
+          applySession(data.session);
+        }
+
+        setIsLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (!mounted) return;
+
+        console.error(
+          'Session initialization failed:',
+          error
+        );
+
+        applySession(null);
+        setIsLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [applySession]);
+
+  const login = async (
+    credentials: LoginCredentials
+  ): Promise<void> => {
+    if (!credentials.password) {
+      throw new Error('Please enter your password.');
+    }
+
+    const { data, error } =
+      await supabase.auth.signInWithPassword({
+        email: credentials.email.trim(),
+        password: credentials.password,
+      });
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data.session) {
+      throw new Error(
+        'Login did not create an active session. Please try again.'
+      );
+    }
+
+    applySession(data.session);
+  };
+
+  const signup = async (
+    credentials: SignupCredentials
+  ): Promise<void> => {
+    if (!credentials.password) {
+      throw new Error('Please enter a password.');
+    }
+
+    const { data, error } = await supabase.auth.signUp({
+      email: credentials.email.trim().toLowerCase(),
+      password: credentials.password,
+      options: {
+        data: {
+          full_name: credentials.name.trim(),
+          role: credentials.role,
+          school: credentials.school ?? '',
+        },
+      },
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    if (data.session) {
+      applySession(data.session);
+    } else {
+      applySession(null);
+    }
+  };
+
+  const loginWithGoogle = async (): Promise<void> => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/workspace`,
+      },
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    // Supabase redirects the browser to Google.
+    // Do not navigate manually after this call.
+  };
+
+  const logout = async (): Promise<void> => {
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      throw error;
+    }
+
+    applySession(null);
+  };
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        isAuthenticated: !!user,
+        isLoading,
+        login,
+        signup,
+        loginWithGoogle,
+        logout,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+
+  if (!context) {
+    throw new Error(
+      'useAuth must be used within an AuthProvider'
+    );
+  }
+
+  return context;
+};
+
+========== .\frontend\src\components\workspace\ContextPanel.tsx ==========
+
+
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import type { WorkflowType } from '../../types/workflow';
+import { api } from '../../services/api';
+import { AnswerSheetReview } from './reviews/AnswerSheetReview';
+import { QuestionPaperReview } from './reviews/QuestionPaperReview';
+import { MarksheetPreview } from './reviews/MarksheetPreview';
+import { AttendancePreview } from './reviews/AttendancePreview';
+import { PPTPreview } from './reviews/PPTPreview';
+import { AnalyticsPreview } from './reviews/AnalyticsPreview';
+import {
+  X,
+  Maximize2,
+  Minimize2,
+  Eye,
+  Loader2,
+  AlertTriangle,
+  FileText,
+  CheckCircle2,
+  Circle,
+  Send,
+} from 'lucide-react';
+
+interface ContextPanelProps {
+  isOpen: boolean;
+  onClose: () => void;
+  reviewType: WorkflowType | null;
+  reviewId: string | null;
+  onApprove: (notes?: string) => void;
+  onReject: (reason?: string) => void;
+  onRequestRevision: (instructions: string) => void;
+  isMobile?: boolean;
+}
+
+interface AssessmentReviewViewProps {
+  data: any;
+  onApprove: (notes?: string) => void;
+  onReject: (reason?: string) => void;
+  onRequestRevision: (instructions: string) => void;
+}
+
+const AssessmentReviewView: React.FC<AssessmentReviewViewProps> = ({
+  data,
+  onApprove,
+  onReject,
+  onRequestRevision,
+}) => {
+  const [teacherFeedback, setTeacherFeedback] = useState('');
+  const [showFeedback, setShowFeedback] = useState(false);
+
+  const assessment = data?.assessment || data || {};
+  const review = data?.review || {};
+  const approval = data?.approval || {};
+
+  const questions: any[] = Array.isArray(assessment.questions)
+    ? assessment.questions
+    : Array.isArray(data?.questions)
+      ? data.questions
+      : [];
+
+  const answerKey: any[] = Array.isArray(assessment.answer_key)
+    ? assessment.answer_key
+    : Array.isArray(data?.answer_key)
+      ? data.answer_key
+      : [];
+
+  const markingScheme: any[] = Array.isArray(assessment.marking_scheme)
+    ? assessment.marking_scheme
+    : Array.isArray(data?.marking_scheme)
+      ? data.marking_scheme
+      : [];
+
+  const reviewStatus = String(
+    review.status ||
+      data?.assessment_review_status ||
+      'unknown',
+  ).toLowerCase();
+
+  const reviewFeedback = String(
+    review.feedback ||
+      data?.assessment_review_feedback ||
+      review.assessment_review_feedback ||
+      '',
+  );
+
+  const manualReviewRequired =
+    review.manual_teacher_review_required === true ||
+    data?.manual_teacher_review_required === true;
+
+  const automatedReviewFailed =
+    review.automated_review_failed === true ||
+    data?.automated_review_failed === true;
+
+  const isPending =
+    approval.status === 'pending' ||
+    approval.approval_status === 'pending';
+
+  const getCorrectOption = (question: any): number | undefined => {
+    const answer = answerKey.find(
+      (item: any) =>
+        Number(item.question_number) ===
+        Number(question.question_number),
+    );
+
+    const value = answer?.correct_option ?? question.correct_option;
+    const number = Number(value);
+
+    return Number.isInteger(number) && number >= 1
+      ? number
+      : undefined;
+  };
+
+  return (
+    <div className="space-y-5 pb-4">
+      {/* Assessment header */}
+      <section className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05]">
+            <FileText className="h-5 w-5 text-white/75" />
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-semibold text-white">
+              {assessment.title ||
+                data?.assessment_title ||
+                data?.title ||
+                'MCQ Assessment'}
+            </h3>
+
+            <p className="mt-1 text-xs leading-relaxed text-white/55">
+              {assessment.instructions || data?.instructions ||
+                'Review every question, option and answer key before making a decision.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <div className="rounded-lg border border-white/[0.08] bg-black/30 p-3">
+            <p className="text-[10px] text-white/45">Questions</p>
+            <p className="mt-1 text-lg font-semibold text-white">
+              {questions.length}
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-white/[0.08] bg-black/30 p-3">
+            <p className="text-[10px] text-white/45">Total marks</p>
+            <p className="mt-1 text-lg font-semibold text-white">
+              {questions.reduce(
+                (sum: number, question: any) =>
+                  sum + Number(question.marks || 0),
+                0,
+              )}
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-white/[0.08] bg-black/30 p-3">
+            <p className="text-[10px] text-white/45">Per question</p>
+            <p className="mt-1 text-lg font-semibold text-white">
+              {assessment.marks_per_question ??
+                data?.marks_per_question ??
+                '—'}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* Automated review status */}
+      <section className="rounded-xl border border-white/15 bg-white/[0.04] p-4">
+        <div className="flex items-start gap-2.5">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-gray-300" />
+
+          <div className="min-w-0">
+            <h4 className="text-xs font-semibold text-gray-200">
+              {reviewStatus === 'failed'
+                ? 'Automated review did not pass'
+                : reviewStatus === 'passed'
+                  ? 'Automated review passed'
+                  : 'Assessment review status'}
+            </h4>
+
+            <p className="mt-1 text-xs leading-relaxed text-white/65">
+              {reviewStatus === 'failed'
+                ? 'Please manually check the answer key. The current key below is the model-provided key and may contain errors.'
+                : reviewStatus === 'passed'
+                  ? 'Please review the assessment before final teacher approval.'
+                  : `Current status: ${reviewStatus}`}
+            </p>
+
+            {(manualReviewRequired || automatedReviewFailed) && (
+              <p className="mt-2 text-[11px] font-medium text-gray-200/90">
+                Manual teacher review is required.
+              </p>
+            )}
+
+            {isPending && (
+              <p className="mt-1 text-[11px] text-white/45">
+                Teacher decision: pending
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Questions */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-white">
+            Questions and answer key
+          </h3>
+
+          <span className="text-[10px] text-white/40">
+            {questions.length} questions
+          </span>
+        </div>
+
+        {questions.length === 0 ? (
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5 text-center">
+            <FileText className="mx-auto h-6 w-6 text-white/30" />
+            <p className="mt-2 text-xs text-white/55">
+              No questions were returned by the backend.
+            </p>
+          </div>
+        ) : (
+          questions.map((question: any, index: number) => {
+            const correctOption = getCorrectOption(question);
+            const options: string[] = Array.isArray(question.options)
+              ? question.options
+              : [];
+
+            return (
+              <article
+                key={question.question_number ?? index}
+                className="rounded-xl border border-white/10 bg-white/[0.025] p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <h4 className="text-xs font-semibold leading-relaxed text-white/90">
+                    Q{question.question_number ?? index + 1}.{' '}
+                    {question.question || 'Question text unavailable'}
+                  </h4>
+
+                  <span className="shrink-0 rounded-md border border-white/10 px-2 py-1 text-[10px] text-white/55">
+                    {question.marks ?? 0} marks
+                  </span>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {options.map((option: string, optionIndex: number) => {
+                    const optionNumber = optionIndex + 1;
+                    const isModelKey = optionNumber === correctOption;
+
+                    return (
+                      <div
+                        key={`${question.question_number}-${optionIndex}`}
+                        className={`flex items-start gap-2.5 rounded-lg border p-2.5 ${
+                          isModelKey
+                            ? 'border-white/15 bg-white/[0.04]'
+                            : 'border-white/[0.06] bg-black/20'
+                        }`}
+                      >
+                        {isModelKey ? (
+                          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-300" />
+                        ) : (
+                          <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-white/25" />
+                        )}
+
+                        <span className="text-xs leading-relaxed text-white/75">
+                          <span className="mr-1.5 text-white/40">
+                            {String.fromCharCode(64 + optionNumber)}.
+                          </span>
+                          {option}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {correctOption !== undefined && (
+                  <p className="mt-2 text-[10px] text-gray-200/80">
+                    Model-provided answer: Option{' '}
+                    {String.fromCharCode(64 + correctOption)}
+                  </p>
+                )}
+
+                {question.explanation && (
+                  <div className="mt-3 rounded-lg bg-white/[0.025] p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
+                      Explanation
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-white/60">
+                      {question.explanation}
+                    </p>
+                  </div>
+                )}
+              </article>
+            );
+          })
+        )}
+      </section>
+
+      {/* Reviewer feedback */}
+      {reviewFeedback && (
+        <section className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+          <h3 className="text-xs font-semibold text-white">
+            Automated review feedback
+          </h3>
+
+          <pre className="mt-3 whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-white/65">
+            {reviewFeedback}
+          </pre>
+        </section>
+      )}
+
+      {/* Marking scheme */}
+      {markingScheme.length > 0 && (
+        <details className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+          <summary className="cursor-pointer text-xs font-semibold text-white/80">
+            View marking scheme
+          </summary>
+
+          <div className="mt-3 space-y-2">
+            {markingScheme.map((item: any, index: number) => (
+              <div
+                key={item.question_number ?? index}
+                className="flex items-center justify-between rounded-lg bg-black/20 px-3 py-2 text-xs"
+              >
+                <span className="text-white/65">
+                  Question {item.question_number ?? index + 1}
+                </span>
+                <span className="text-white/85">
+                  {item.marks} marks
+                </span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* Teacher decisions */}
+      <section className="space-y-3 border-t border-white/10 pt-4">
+        <div>
+          <h3 className="text-sm font-semibold text-white">
+            Teacher decision
+          </h3>
+
+          <p className="mt-1 text-xs leading-relaxed text-white/45">
+            Confirm the answer key yourself. Your approval records the
+            teacher's decision; it does not change the automated review result.
+          </p>
+        </div>
+
+        {showFeedback && (
+          <textarea
+            value={teacherFeedback}
+            onChange={(event) => setTeacherFeedback(event.target.value)}
+            rows={3}
+            placeholder="Describe the questions or answers that need to change..."
+            className="w-full resize-y rounded-lg border border-white/10 bg-black px-3 py-2.5 text-xs leading-relaxed text-white outline-none placeholder:text-white/25 focus:border-white/30"
+          />
+        )}
+
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              onApprove('Manually reviewed by teacher.')
+            }
+            className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-xs font-semibold text-black transition-colors hover:bg-white/85"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            Approve after manual review
+          </button>
+
+          {!showFeedback ? (
+            <button
+              type="button"
+              onClick={() => setShowFeedback(true)}
+              className="flex items-center justify-center gap-2 rounded-xl border border-white/15 px-4 py-3 text-xs font-medium text-white/80 transition-colors hover:bg-white/[0.05]"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Ask for changes
+            </button>
+          ) : (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const feedback = teacherFeedback.trim();
+
+                  if (!feedback) return;
+
+                  onRequestRevision(feedback);
+                }}
+                disabled={!teacherFeedback.trim()}
+                className="flex-1 rounded-xl bg-white px-4 py-3 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Submit changes
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowFeedback(false);
+                  setTeacherFeedback('');
+                  onReject();
+                }}
+                className="rounded-xl border border-white/10 px-3 py-3 text-xs text-white/70 hover:bg-white/[0.05]"
+              >
+                Reject
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+};
+
+export const ContextPanel: React.FC<ContextPanelProps> = ({
+  isOpen,
+  onClose,
+  reviewType,
+  reviewId,
+  onApprove,
+  onReject,
+  onRequestRevision,
+  isMobile = false,
+}) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || !reviewType || !reviewId) {
+      setData(null);
+      setLoadError(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    setLoading(true);
+    setData(null);
+    setLoadError(null);
+
+    api
+      .getReviewDetails(reviewType, reviewId)
+      .then((result) => {
+        if (cancelled) return;
+
+        if (!result) {
+          setLoadError(
+            'No assessment was found for this request ID. Send the workspace request again and reopen the review panel.',
+          );
+          return;
+        }
+
+        setData(result);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+
+        console.error('Failed to load review details:', error);
+        setLoadError(
+          error instanceof Error
+            ? error.message
+            : 'Unable to load review details from FastAPI.',
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, reviewType, reviewId]);
+
+  if (!isOpen) return null;
+
+  const type = String(reviewType || '');
+
+  const getTitle = () => {
+    switch (type) {
+      case 'assessment':
+        return 'MCQ Assessment Review';
+      case 'answer_sheet_checking':
+        return 'Answer Sheet Review (STU047)';
+      case 'question_paper_generation':
+        return 'Question Paper Review';
+      case 'marksheet':
+        return 'Marksheet Compilation Preview';
+      case 'attendance':
+        return 'Classroom Attendance Verification';
+      case 'ppt_generation':
+        return 'Lecture Presentation Slides';
+      case 'analytics':
+        return 'Diagnostic Class Analytics';
+      default:
+        return 'Artifact Review';
+    }
+  };
+
+  return (
+    <AnimatePresence>
+      <motion.aside
+        initial={{ x: '100%', opacity: 0 }}
+        animate={{ x: 0, opacity: 1 }}
+        exit={{ x: '100%', opacity: 0 }}
+        transition={{ type: 'spring', damping: 26, stiffness: 240 }}
+        className={`fixed bottom-0 right-0 top-0 z-40 flex flex-col border-l border-white/10 bg-black shadow-2xl lg:relative ${
+          isMobile
+            ? 'h-full w-full'
+            : isExpanded
+              ? 'w-full lg:w-[720px]'
+              : 'w-full lg:w-[520px]'
+        }`}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-white/10 bg-[#080808] p-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] text-white/80">
+              <Eye className="h-4 w-4" />
+            </div>
+
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-white">
+                {getTitle()}
+              </h2>
+
+              <div className="mt-1 flex items-center gap-1.5 text-[10px] text-white/45">
+                <span className="h-1.5 w-1.5 rounded-full bg-white/70" />
+                <span>Teacher review checkpoint</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="ml-2 flex shrink-0 items-center gap-1">
+            {!isMobile && (
+              <button
+                type="button"
+                onClick={() => setIsExpanded(!isExpanded)}
+                className="rounded-lg p-2 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+                title={isExpanded ? 'Collapse panel' : 'Expand panel'}
+                aria-label={isExpanded ? 'Collapse panel' : 'Expand panel'}
+              >
+                {isExpanded ? (
+                  <Minimize2 className="h-4 w-4" />
+                ) : (
+                  <Maximize2 className="h-4 w-4" />
+                )}
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg p-2 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+              title="Close panel"
+              aria-label="Close panel"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+          {loading ? (
+            <div className="flex h-64 flex-col items-center justify-center gap-3">
+              <Loader2 className="h-7 w-7 animate-spin text-white/70" />
+              <p className="text-xs text-white/45">
+                Loading review details from TCO...
+              </p>
+            </div>
+          ) : loadError ? (
+            <div className="flex min-h-64 flex-col items-center justify-center px-6 text-center">
+              <AlertTriangle className="mb-3 h-6 w-6 text-gray-300" />
+              <h3 className="text-sm font-medium text-white/80">
+                Unable to load review
+              </h3>
+              <p className="mt-2 max-w-sm break-words text-xs leading-relaxed text-white/45">
+                {loadError}
+              </p>
+              <p className="mt-2 text-[10px] text-white/35">
+                Request ID: {reviewId || 'Not available'}
+              </p>
+            </div>
+          ) : !data ? (
+            <div className="flex min-h-64 flex-col items-center justify-center px-6 text-center">
+              <Eye className="mb-3 h-5 w-5 text-white/40" />
+              <h3 className="text-sm font-medium text-white/80">
+                No review data available
+              </h3>
+              <p className="mt-1 max-w-xs text-xs leading-relaxed text-white/40">
+                Send an assessment request in the Workspace, then open its review panel.
+              </p>
+            </div>
+          ) : (
+            <>
+              {type === 'assessment' && (
+                <AssessmentReviewView
+                  data={data}
+                  onApprove={onApprove}
+                  onReject={onReject}
+                  onRequestRevision={onRequestRevision}
+                />
+              )}
+
+              {type === 'answer_sheet_checking' && (
+                <AnswerSheetReview
+                  data={data}
+                  onApprove={onApprove}
+                  onReject={onReject}
+                  onRequestRevision={onRequestRevision}
+                />
+              )}
+
+              {type === 'question_paper_generation' && (
+                <QuestionPaperReview
+                  data={data}
+                  onApprove={onApprove}
+                  onRequestRevision={onRequestRevision}
+                />
+              )}
+
+              {type === 'marksheet' && (
+                <MarksheetPreview
+                  data={data}
+                  onApprove={onApprove}
+                />
+              )}
+
+              {type === 'attendance' && (
+                <AttendancePreview
+                  data={data}
+                  onApprove={onApprove}
+                />
+              )}
+
+              {type === 'ppt_generation' && (
+                <PPTPreview
+                  data={data}
+                  onApprove={onApprove}
+                  onRequestRevision={onRequestRevision}
+                />
+              )}
+
+              {type === 'analytics' && (
+                <AnalyticsPreview data={data} />
+              )}
+
+              {![
+                'assessment',
+                'answer_sheet_checking',
+                'question_paper_generation',
+                'marksheet',
+                'attendance',
+                'ppt_generation',
+                'analytics',
+              ].includes(type) && (
+                <div className="rounded-xl border border-white/10 p-4">
+                  <p className="text-xs text-white/60">
+                    No renderer is configured for review type: {type}
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </motion.aside>
+    </AnimatePresence>
+  );
+};
+
+========== .\frontend\src\types\chat.ts ==========
+
+
+import {
+  WorkflowProgress,
+  ClarificationRequest,
+  ApprovalRequest,
+  WorkflowType,
+} from './workflow';
+
+export type SenderRole = 'teacher' | 'tco';
+
+export type ConversationStatus =
+  | 'Completed'
+  | 'In Review'
+  | 'Needs Input'
+  | 'Running'
+  | 'Draft'
+  | 'Archived';
+
+export type ConversationTimeGroup =
+  | 'Today'
+  | 'Yesterday'
+  | 'Previous 7 Days'
+  | 'Older';
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  size: string;
+  type: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  sender: SenderRole;
+  timestamp: string;
+  content: string;
+  workflowProgress?: WorkflowProgress;
+  clarification?: ClarificationRequest;
+  approval?: ApprovalRequest;
+  attachments?: ChatAttachment[];
+  reviewType?: WorkflowType;
+  reviewDataId?: string;
+  isStreaming?: boolean;
+}
+
+export interface Conversation {
+  id: string;
+  title: string;
+  status: ConversationStatus;
+  group: ConversationTimeGroup;
+  lastUpdated: string;
+  preview: string;
+  messages: ChatMessage[];
+  activeWorkflowType?: WorkflowType;
+}
+
+export interface QuickActionItem {
+  id: string;
+  title: string;
+  description: string;
+  iconName: string;
+  prompt: string;
+  workflowType: WorkflowType;
+}
+
+========== .\frontend\src\types\workflow.ts ==========
+
+export type WorkflowState =
+  | 'idle'
+  | 'understanding'
+  | 'needs_input'
+  | 'running'
+  | 'review_required'
+  | 'approved'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type SpecializedAgent =
+  | 'TCO Master Agent'
+  | 'Assessment Agent'
+  | 'Evaluation Agent'
+  | 'Answer Sheet Checking Agent'
+  | 'Attendance Agent'
+  | 'Analytics Agent'
+  | 'Presentation Agent'
+  | 'Content Preparation Agent';
+
+export type WorkflowType =
+  | 'answer_sheet_checking'
+  | 'question_paper_generation'
+  | 'assessment'
+  | 'attendance'
+  | 'marksheet'
+  | 'ppt_generation'
+  | 'analytics'
+  | 'student_insights';
+
+export interface WorkflowStep {
+  id: string;
+  agent: SpecializedAgent;
+  label: string;
+  description: string;
+  status: 'pending' | 'active' | 'completed' | 'failed';
+  timestamp?: string;
+}
+
+export interface ClarificationOption {
+  id: string;
+  label: string;
+  description?: string;
+  icon?: string;
+}
+
+export interface ClarificationRequest {
+  id: string;
+  prompt: string;
+  contextHint?: string;
+  options: ClarificationOption[];
+  allowCustomInput?: boolean;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  title: string;
+  summary: string;
+  metrics?: { label: string; value: string }[];
+  reviewType: WorkflowType;
+  requiresReview?: boolean;
+}
+
+export interface WorkflowProgress {
+  workflowId: string;
+  type: WorkflowType;
+  state: WorkflowState;
+  activeAgent: SpecializedAgent;
+  steps: WorkflowStep[];
+  clarification?: ClarificationRequest;
+  approval?: ApprovalRequest;
+  resultSummary?: string;
+}

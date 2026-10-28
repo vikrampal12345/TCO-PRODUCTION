@@ -136,6 +136,21 @@ For filtering/ranking/class-performance requests:
 - route the request to analytics.performance
 
 ==================================================
+COPY CHECKING
+==================================================
+
+For handwritten or scanned student answer-sheet checking, choose:
+
+copy_checking.grade
+    -> extract answers from an uploaded student PDF, grade them against
+       the teacher-approved locked marking scheme, and create a checked PDF.
+
+Do not route handwritten/scanned answer-copy checking to evaluation.check.
+Use evaluation.check for normalized submissions such as typed or form answers.
+Copy checking requires an answer sheet PDF, a question paper, and a locked
+marking scheme. If any input is missing, the Copy Checking Agent must ask for it.
+
+==================================================
 SOURCE POLICY
 ==================================================
 
@@ -315,6 +330,10 @@ source_url = {state.get("source_url", "")}
 uploaded_file_name = {state.get("uploaded_file_name", "")}
 uploaded_file_path = {state.get("uploaded_file_path", "")}
 knowledge_source = {state.get("knowledge_source", "")}
+answer_sheet_path = {state.get("answer_sheet_path", "")}
+question_paper_path = {state.get("question_paper_path", "")}
+marking_scheme_path = {state.get("marking_scheme_path", "")}
+page_limit = {state.get("page_limit", 2)}
 
 IMPORTANT:
 The structured teacher input above comes from the teacher-facing form.
@@ -535,6 +554,27 @@ TEACHER REQUEST:
                 "status": "waiting_for_teacher",
             }
 
+        # Assessment generation must not begin until the teacher has selected
+        # one of the explicit source modes in the workspace.
+        if (
+            intent == "assessment"
+            and state.get("source_preference")
+            == "awaiting_source_selection"
+        ):
+            return {
+                **state,
+                "intent": intent,
+                "language": decision.language,
+                "required_capability": None,
+                "next_action": "source_selection",
+                "missing_information": [],
+                "clarification_message": (
+                    "Your assessment details are complete. "
+                    "Choose a source mode to continue."
+                ),
+                "status": "waiting_for_source_selection",
+            }
+
         # =====================================================
         # CAPABILITY VALIDATION
         # =====================================================
@@ -543,6 +583,12 @@ TEACHER REQUEST:
             decision.required_capability
             or state.get("required_capability")
         )
+
+        # Copy checking has a single canonical capability. If the Master
+        # identified this intent, do not depend on a second model field
+        # being populated correctly.
+        if intent == "copy_checking" and self.registry.has_capability("copy_checking.grade"):
+            capability = "copy_checking.grade"
 
         if not capability:
             return {
@@ -627,6 +673,13 @@ TEACHER REQUEST:
             "source_preference": source_preference,
 
             "source_url": source_url,
+            "answer_sheet_path": state.get("answer_sheet_path"),
+            "question_paper_path": state.get("question_paper_path"),
+            "marking_scheme_path": state.get("marking_scheme_path"),
+            "student_number": state.get("student_number"),
+            "assessment_id": state.get("assessment_id"),
+            "page_limit": state.get("page_limit", 2),
+            "output_dir": state.get("output_dir", "data/copy_checker/outputs"),
         }
 
         new_task = Task(

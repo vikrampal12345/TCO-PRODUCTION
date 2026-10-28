@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from backend.rag.loader import load_file
@@ -10,6 +12,9 @@ from backend.tools.classroom import ClassroomTool, ClassroomToolError
 
 class ClassroomIngestionError(Exception):
     """Raised when Google Classroom material ingestion fails."""
+
+
+logger = logging.getLogger(__name__)
 
 
 class ClassroomIngestionService:
@@ -113,12 +118,19 @@ class ClassroomIngestionService:
             school_id=school_id,
         )
 
+        ingestion_started_at = perf_counter()
+
         # -----------------------------------------------------
         # 1. COURSE
         # -----------------------------------------------------
 
+        stage_started_at = perf_counter()
         course = self._find_course(
             course_id=course_id
+        )
+        logger.info(
+            "Classroom ingestion stage=course_lookup seconds=%.2f",
+            perf_counter() - stage_started_at,
         )
 
         course_name = str(
@@ -132,9 +144,14 @@ class ClassroomIngestionService:
         # 2. MATERIAL
         # -----------------------------------------------------
 
+        stage_started_at = perf_counter()
         material = self._find_material(
             course_id=course_id,
             material_id=material_id,
+        )
+        logger.info(
+            "Classroom ingestion stage=material_lookup seconds=%.2f",
+            perf_counter() - stage_started_at,
         )
 
         # -----------------------------------------------------
@@ -172,6 +189,7 @@ class ClassroomIngestionService:
         # 4. DRIVE METADATA
         # -----------------------------------------------------
 
+        stage_started_at = perf_counter()
         try:
             drive_info = (
                 self.classroom.get_drive_file(
@@ -182,6 +200,10 @@ class ClassroomIngestionService:
             raise ClassroomIngestionError(
                 f"Could not read Drive metadata: {exc}"
             ) from exc
+        logger.info(
+            "Classroom ingestion stage=drive_metadata seconds=%.2f",
+            perf_counter() - stage_started_at,
+        )
 
         drive_name = str(
             drive_info.get(
@@ -204,6 +226,7 @@ class ClassroomIngestionService:
         # 5. DOWNLOAD
         # -----------------------------------------------------
 
+        stage_started_at = perf_counter()
         try:
             download_result = (
                 self.classroom.download_drive_file(
@@ -215,6 +238,10 @@ class ClassroomIngestionService:
             raise ClassroomIngestionError(
                 f"Could not download Classroom file: {exc}"
             ) from exc
+        logger.info(
+            "Classroom ingestion stage=drive_download seconds=%.2f",
+            perf_counter() - stage_started_at,
+        )
 
         if not download_result.get(
             "success"
@@ -249,6 +276,7 @@ class ClassroomIngestionService:
         # 6. LOAD
         # -----------------------------------------------------
 
+        stage_started_at = perf_counter()
         try:
             documents = load_file(
                 str(local_file_path)
@@ -258,6 +286,11 @@ class ClassroomIngestionService:
                 f"Could not load downloaded Classroom "
                 f"file '{local_file_path.name}': {exc}"
             ) from exc
+        logger.info(
+            "Classroom ingestion stage=file_load seconds=%.2f documents=%d",
+            perf_counter() - stage_started_at,
+            len(documents),
+        )
 
         if not documents:
             raise ClassroomIngestionError(
@@ -355,6 +388,7 @@ class ClassroomIngestionService:
         # 9. INDEX
         # -----------------------------------------------------
 
+        stage_started_at = perf_counter()
         try:
             chunk_count = index_documents(
                 enriched_documents,
@@ -367,6 +401,15 @@ class ClassroomIngestionService:
                 f"Could not index Classroom material "
                 f"into ChromaDB: {exc}"
             ) from exc
+        logger.info(
+            "Classroom ingestion stage=vector_index seconds=%.2f chunks=%d",
+            perf_counter() - stage_started_at,
+            chunk_count,
+        )
+        logger.info(
+            "Classroom ingestion complete: seconds=%.2f",
+            perf_counter() - ingestion_started_at,
+        )
 
         return {
             "success": True,

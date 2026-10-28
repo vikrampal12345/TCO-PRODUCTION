@@ -4,6 +4,8 @@ from typing import Any
 from backend.agents.analytics_agent import AnalyticsAgent
 from backend.agents.assessment_agent import AssessmentAgent
 from backend.agents.assessment_review_agent import AssessmentReviewAgent
+from backend.agents.evaluation_agent import EvaluationAgent
+from backend.agents.copy_checking_agent import CopyCheckingAgent
 
 from backend.core.registry import ComponentRegistry
 
@@ -77,11 +79,15 @@ def build_default_registry() -> ComponentRegistry:
         AnalyticsAgent()
     )
 
+    registry.register_agent(
+        EvaluationAgent()
+    )
+
+    registry.register_agent(
+        CopyCheckingAgent()
+    )
+
     # Future specialist agents:
-    #
-    # registry.register_agent(
-    #     EvaluationAgent()
-    # )
     #
     # registry.register_agent(
     #     TeachingAgent()

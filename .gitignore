@@ -180,3 +180,246 @@ token_forms_wrong_scope_backup.json
 # Generated web-source runtime data
 data/documents/web_sources/
 
+# ==========================================
+# TCO - Python Backend + React Frontend
+# ==========================================
+
+# ------------------------------------------
+# Python
+# ------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+.python-version
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+virtualenv/
+.conda/
+
+# Python packaging
+build/
+dist/
+site/
+wheels/
+*.egg
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+share/python-wheels/
+
+# Testing and coverage
+.pytest_cache/
+.mypy_cache/
+.pytype/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+test-results/
+junit.xml
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# ------------------------------------------
+# Environment variables and secrets
+# ------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# Credentials
+credentials.json
+client_secret.json
+service-account*.json
+secrets.json
+
+# ------------------------------------------
+# Node.js and React / Vite frontend
+# ------------------------------------------
+node_modules/
+frontend/node_modules/
+
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/.cache/
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Package-manager logs
+*.log
+
+# ------------------------------------------
+# Editors and operating system
+# ------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ------------------------------------------
+# Local databases
+# ------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.sqlite-journal
+
+# ------------------------------------------
+# Logs and temporary files
+# ------------------------------------------
+logs/
+log/
+*.log.*
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# ------------------------------------------
+# Uploaded documents and generated outputs
+# ------------------------------------------
+# Add runtime folders here only if these are
+# generated locally and should not be committed.
+data/uploads/
+data/work/
+data/output/
+data/outputs/
+data/temp/
+
+# Copy Checking generated output
+checked_copies/
+generated_outputs/
+
+# ------------------------------------------
+# Student documents and private data
+# ------------------------------------------
+# Store real student files outside Git.
+# These patterns apply anywhere in the repository.
+STU*.pdf
+STU*.png
+STU*.jpg
+STU*.jpeg
+
+# ------------------------------------------
+# Machine Learning model files and caches
+# ------------------------------------------
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.gguf
+*.model
+
+# Hugging Face / Transformers caches
+.cache/huggingface/
+.cache/torch/
+.cache/transformers/
+huggingface/
+models/cache/
+
+# ------------------------------------------
+# Application runtime artifacts
+# ------------------------------------------
+*.pid
+*.seed
+*.stackdump
+
+# ------------------------------------------
+# Local environment configuration
+# ------------------------------------------
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ------------------------------------------
+# OS-specific files
+# ------------------------------------------
+$RECYCLE.BIN/
+System Volume Information/
+
+cd E:\BOOK\TCO-final-version
+
+@'
+
+# ==========================================
+# BACKUP FILES - TCO
+# ==========================================
+
+# Python, TypeScript, JavaScript and other backups
+*.bak
+*.bak-*
+*.bak.*
+*.backup
+*.backup-*
+*.backup.*
+*.old
+*.old-*
+*.orig
+*.orig.*
+*.save
+*.save.*
+*.rej
+
+# Editor temporary and recovery files
+*~
+*.swp
+*.swo
+*.tmp
+*.temp
+*.autosave
+
+# Common backup naming formats
+*_backup
+*_backup.*
+*_backup_*
+*-backup
+*-backup.*
+*-backup-*
+*_bak
+*_bak.*
+*.copy
+*.copy.*
+
+# Backup directories (any location)
+backup/
+backups/
+Backup/
+Backups/
+
+'@ | Add-Content -Path .\.gitignore -Encoding utf8
+
+git status --short

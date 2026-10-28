@@ -1,0 +1,2524 @@
+
+========== .\frontend\src\App.tsx ==========
+
+import React from 'react';
+import { BrowserRouter } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
+import { AppRoutes } from './routes';
+
+export const App: React.FC = () => {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+    </BrowserRouter>
+  );
+};
+
+export default App;
+
+========== .\frontend\src\pages\Workspace.tsx ==========
+
+import React, { useEffect, useState } from 'react';
+import { ConversationSidebar } from '../components/workspace/ConversationSidebar';
+import { ChatWindow } from '../components/workspace/ChatWindow';
+import { ContextPanel } from '../components/workspace/ContextPanel';
+import { useChat } from '../hooks/useChat';
+
+export const Workspace: React.FC = () => {
+  const {
+    conversations,
+    activeConversation,
+    activeConversationId,
+    isProcessing,
+    isReviewPanelOpen,
+    error,
+    clearError,
+    activeReviewType,
+    activeReviewId,
+    selectConversation,
+    createNewChat,
+    sendMessage,
+    handleClarification,
+    handleApprove,
+    handleReject,
+    handleRequestRevision,
+    openReviewPanel,
+    closeReviewPanel,
+    stopProcessing,
+    renameConversation,
+    archiveConversation,
+    deleteConversation,
+  } = useChat();
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 1024
+  );
+
+  useEffect(() => {
+    const updateViewport = () => setIsMobileViewport(window.innerWidth < 1024);
+    window.addEventListener('resize', updateViewport);
+    return () => window.removeEventListener('resize', updateViewport);
+  }, []);
+
+  return (
+    <div className="flex h-[100dvh] min-h-[100svh] w-full max-w-full overflow-hidden bg-black font-sans text-gray-100 selection:bg-white/20 selection:text-white">
+      {/* Desktop Sidebar */}
+      <div className="hidden lg:block h-full shrink-0">
+        <ConversationSidebar
+          conversations={conversations}
+          activeId={activeConversationId}
+          onSelect={selectConversation}
+          onNewChat={createNewChat}
+          onRename={renameConversation}
+          onArchive={archiveConversation}
+          onDelete={deleteConversation}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        />
+      </div>
+
+      {/* Mobile Sidebar Overlay Drawer */}
+      {mobileSidebarOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex">
+          <div
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setMobileSidebarOpen(false)}
+          />
+          <div className="relative w-80 max-w-[85vw] h-full z-10">
+            <ConversationSidebar
+              conversations={conversations}
+              activeId={activeConversationId}
+              onSelect={selectConversation}
+              onNewChat={createNewChat}
+              onRename={renameConversation}
+              onArchive={archiveConversation}
+              onDelete={deleteConversation}
+              isMobile={true}
+              onCloseMobile={() => setMobileSidebarOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Center Chat Workspace */}
+      <main className="flex-1 flex flex-col h-full min-w-0 overflow-hidden relative">
+        {error && (
+          <div role="alert" className="absolute left-3 right-3 top-3 z-40 mx-auto flex max-w-3xl items-start justify-between gap-3 rounded-xl border border-white/15 bg-[#111111] px-4 py-3 text-xs text-gray-100 shadow-xl">
+            <span className="min-w-0 break-words">{error}</span>
+            <button type="button" onClick={clearError} className="shrink-0 rounded px-2 py-1 text-gray-200 hover:bg-white/10" aria-label="Dismiss error">Dismiss</button>
+          </div>
+        )}
+        <ChatWindow
+          conversation={activeConversation}
+          isProcessing={isProcessing}
+          onSendMessage={sendMessage}
+          onClarification={handleClarification}
+          onApprove={handleApprove}
+          onRequestRevision={handleRequestRevision}
+          onOpenReview={openReviewPanel}
+          onStopProcessing={stopProcessing}
+          isReviewPanelOpen={isReviewPanelOpen}
+          onToggleReviewPanel={() => {
+            if (isReviewPanelOpen) {
+              closeReviewPanel();
+            } else {
+              openReviewPanel(activeReviewType || 'answer_sheet_checking');
+            }
+          }}
+          onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+        />
+      </main>
+
+      {/* Right Review Panel Drawer */}
+      <ContextPanel
+        isOpen={isReviewPanelOpen}
+        onClose={closeReviewPanel}
+        reviewType={activeReviewType}
+        reviewId={activeReviewId}
+        onApprove={handleApprove}
+        onReject={handleReject}
+        onRequestRevision={handleRequestRevision}
+        isMobile={isMobileViewport}
+      />
+    </div>
+  );
+};
+
+========== .\frontend\src\components\workspace\ConversationSidebar.tsx ==========
+
+import React, { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Conversation, ConversationStatus } from '../../types/chat';
+import { useAuth } from '../../context/AuthContext';
+
+import {
+  Plus,
+  Search,
+  MoreVertical,
+  Edit2,
+  Archive,
+  Trash2,
+  ChevronLeft,
+  ChevronRight,
+  Settings,
+  LogOut,
+  Clock,
+  AlertCircle,
+} from 'lucide-react';
+
+interface ConversationSidebarProps {
+  conversations: Conversation[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+  onNewChat: () => void;
+  onRename: (id: string, newTitle: string) => void;
+  onArchive: (id: string) => void;
+  onDelete: (id: string) => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+  isMobile?: boolean;
+  onCloseMobile?: () => void;
+}
+
+export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({
+  conversations,
+  activeId,
+  onSelect,
+  onNewChat,
+  onRename,
+  onArchive,
+  onDelete,
+  collapsed = false,
+  onToggleCollapse,
+  isMobile = false,
+  onCloseMobile,
+}) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  // Search conversations without grouping them by date.
+  const filtered = conversations.filter((conversation) =>
+    conversation.title
+      .toLowerCase()
+      .includes(searchQuery.toLowerCase())
+  );
+
+  // Keep status indicators neutral and compact.
+  // Completed status is intentionally not displayed.
+  const getStatusBadge = (status: ConversationStatus) => {
+    switch (status) {
+      case 'In Review':
+        return (
+          <span className="inline-flex items-center gap-1.5 text-[10px] text-gray-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+            In Review
+          </span>
+        );
+
+      case 'Needs Input':
+        return (
+          <span className="inline-flex items-center gap-1.5 text-[10px] text-gray-300">
+            <AlertCircle className="w-3 h-3 text-gray-400" />
+            Needs Input
+          </span>
+        );
+
+      case 'Running':
+        return (
+          <span className="inline-flex items-center gap-1.5 text-[10px] text-gray-300">
+            <Clock className="w-3 h-3 text-gray-400" />
+            Running
+          </span>
+        );
+
+      case 'Completed':
+        return null;
+
+      case 'Draft':
+      default:
+        return null;
+    }
+  };
+
+  const handleStartRename = (conversation: Conversation) => {
+    setEditingId(conversation.id);
+    setEditTitle(conversation.title);
+    setMenuOpenId(null);
+  };
+
+  const handleSaveRename = (id: string) => {
+    if (editTitle.trim()) {
+      onRename(id, editTitle.trim());
+    }
+
+    setEditingId(null);
+  };
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
+  // Collapsed sidebar
+  if (collapsed && !isMobile) {
+    return (
+      <div className="w-16 bg-black border-r border-white/10 flex flex-col items-center py-5 justify-between h-full select-none">
+
+        <div className="flex flex-col items-center gap-6">
+
+          <Link
+            to="/"
+            className="tco-brand-link flex h-10 w-10 items-center justify-center rounded-xl"
+            title="TCO Home"
+            aria-label="TCO Home"
+          >
+            <span className="tco-sidebar-mark" aria-hidden="true">
+              <img src="/tco-monogram.png" alt="" />
+            </span>
+          </Link>
+
+          <button
+            type="button"
+            onClick={onNewChat}
+            className="
+              w-10 h-10
+              rounded-xl
+              bg-white
+              text-black
+              hover:bg-gray-200
+              flex
+              items-center
+              justify-center
+              transition-colors
+            "
+            title="New Chat"
+          >
+            <Plus className="w-5 h-5" />
+          </button>
+
+        </div>
+
+        <div className="flex flex-col items-center gap-4">
+
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="
+              p-2
+              rounded-lg
+              text-gray-400
+              hover:text-white
+              hover:bg-white/10
+              transition-colors
+            "
+            title="Expand Sidebar"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
+
+          <div
+            className="
+              w-8 h-8
+              rounded-full
+              bg-white/10
+              border border-white/10
+              text-white
+              flex items-center justify-center
+              text-xs font-semibold
+            "
+            title={user?.name || 'Teacher'}
+          >
+            {user?.name?.[0] || 'T'}
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <aside
+      className="
+        w-72 sm:w-80
+        bg-black
+        border-r border-white/10
+        flex flex-col
+        h-full
+        select-none
+        relative
+        z-20
+      "
+    >
+
+      {/* Header */}
+      <div className="px-4 py-4 border-b border-white/10 flex items-center justify-between">
+
+        <Link to="/" className="tco-brand-link group flex items-center gap-2.5" aria-label="TCO Workspace home">
+          <span className="tco-sidebar-mark" aria-hidden="true">
+            <img src="/tco-monogram.png" alt="" />
+          </span>
+          <span className="tco-sidebar-wordmark">TCO</span>
+          <span className="text-xs font-medium tracking-wide text-white/60">Workspace</span>
+        </Link>
+
+        {onToggleCollapse && !isMobile && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="
+              p-1.5
+              rounded-lg
+              text-gray-500
+              hover:text-white
+              hover:bg-white/10
+              transition-colors
+            "
+            title="Collapse Sidebar"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+        )}
+
+        {isMobile && onCloseMobile && (
+          <button
+            type="button"
+            onClick={onCloseMobile}
+            className="
+              p-2
+              rounded-lg
+              text-gray-400
+              hover:text-white
+              hover:bg-white/10
+              transition-colors
+            "
+            aria-label="Close sidebar"
+          >
+            <span className="text-lg leading-none">×</span>
+          </button>
+        )}
+
+      </div>
+
+      {/* New Chat & Search */}
+      <div className="p-3 space-y-3">
+
+        <button
+          type="button"
+          onClick={onNewChat}
+          className="
+            w-full
+            py-2.5
+            px-3.5
+            rounded-xl
+            bg-white
+            text-black
+            font-semibold
+            text-sm
+            hover:bg-gray-200
+            transition-colors
+            flex
+            items-center
+            justify-center
+            gap-2
+            group
+          "
+        >
+          <Plus className="w-4 h-4 transition-transform group-hover:rotate-90" />
+          <span>New Chat</span>
+        </button>
+
+        <div className="relative">
+
+          <Search
+            className="
+              w-4 h-4
+              absolute
+              left-3
+              top-1/2
+              -translate-y-1/2
+              text-gray-500
+              pointer-events-none
+            "
+          />
+
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search conversations..."
+            className="
+              w-full
+              pl-9
+              pr-3
+              py-2.5
+              bg-white/[0.03]
+              border border-white/10
+              rounded-lg
+              text-sm
+              text-white
+              placeholder-gray-600
+              focus:outline-none
+              focus:border-white/30
+              transition-colors
+            "
+          />
+
+        </div>
+
+      </div>
+
+      {/* Conversation List — No Date Group Labels */}
+      <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
+
+        {filtered.length === 0 ? (
+          <div className="px-4 py-8 text-center">
+            <div className="text-sm text-gray-400">
+              {searchQuery
+                ? 'No conversations found.'
+                : 'No conversations yet.'}
+            </div>
+
+            {!searchQuery && (
+              <p className="text-xs text-gray-600 mt-1">
+                Start a new chat to get going.
+              </p>
+            )}
+          </div>
+        ) : (
+          filtered.map((conversation) => {
+            const isActive = conversation.id === activeId;
+            const isEditing = editingId === conversation.id;
+
+            return (
+              <div
+                key={conversation.id}
+                className={`
+                  group
+                  relative
+                  rounded-lg
+                  border
+                  transition-colors
+                  ${
+                    isActive
+                      ? 'bg-white/[0.09] border-white/10'
+                      : 'border-transparent hover:bg-white/[0.045]'
+                  }
+                `}
+              >
+
+                {/* Conversation */}
+                <div
+                  onClick={() => {
+                    if (isEditing) return;
+
+                    onSelect(conversation.id);
+
+                    if (isMobile && onCloseMobile) {
+                      onCloseMobile();
+                    }
+                  }}
+                  className="px-3 py-3 cursor-pointer"
+                >
+
+                  <div className="flex items-center gap-2">
+
+                    <div className="min-w-0 flex-1">
+
+                      {isEditing ? (
+                        <input
+                          type="text"
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          onBlur={() => handleSaveRename(conversation.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleSaveRename(conversation.id);
+                            }
+
+                            if (e.key === 'Escape') {
+                              setEditingId(null);
+                            }
+                          }}
+                          autoFocus
+                          className="
+                            w-full
+                            bg-black
+                            text-sm
+                            px-2 py-1
+                            rounded-md
+                            border border-white/20
+                            text-white
+                            focus:outline-none
+                            focus:border-white/40
+                          "
+                        />
+                      ) : (
+                        <div
+                          className={`
+                            text-sm
+                            truncate
+                            ${
+                              isActive
+                                ? 'text-white font-medium'
+                                : 'text-gray-300'
+                            }
+                          `}
+                        >
+                          {conversation.title}
+                        </div>
+                      )}
+
+                      {getStatusBadge(conversation.status) && (
+                        <div className="mt-1">
+                          {getStatusBadge(conversation.status)}
+                        </div>
+                      )}
+
+                      <div className="text-xs text-gray-500 truncate mt-1">
+                        {conversation.preview || 'New conversation'}
+                      </div>
+
+                    </div>
+
+                    {/* Context Menu */}
+                    {!isEditing && (
+                      <div className="relative shrink-0">
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+
+                            setMenuOpenId(
+                              menuOpenId === conversation.id
+                                ? null
+                                : conversation.id
+                            );
+                          }}
+                          className="
+                            p-1.5
+                            rounded-md
+                            text-gray-500
+                            hover:text-white
+                            hover:bg-white/10
+                            opacity-100
+                            sm:opacity-0
+                            sm:group-hover:opacity-100
+                            focus:opacity-100
+                            transition-all
+                          "
+                          title="Conversation options"
+                          aria-label={`Options for ${conversation.title}`}
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+
+                        {menuOpenId === conversation.id && (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="
+                              absolute
+                              right-0
+                              top-8
+                              w-36
+                              bg-[#111111]
+                              border border-white/10
+                              rounded-xl
+                              shadow-xl
+                              py-1
+                              z-30
+                              text-sm
+                              text-gray-300
+                            "
+                          >
+
+                            <button
+                              type="button"
+                              onClick={() => handleStartRename(conversation)}
+                              className="
+                                w-full
+                                px-3 py-2
+                                text-left
+                                hover:bg-white/[0.07]
+                                flex items-center gap-2
+                              "
+                            >
+                              <Edit2 className="w-3.5 h-3.5 text-gray-400" />
+                              <span>Rename</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onArchive(conversation.id);
+                                setMenuOpenId(null);
+                              }}
+                              className="
+                                w-full
+                                px-3 py-2
+                                text-left
+                                hover:bg-white/[0.07]
+                                flex items-center gap-2
+                              "
+                            >
+                              <Archive className="w-3.5 h-3.5 text-gray-400" />
+                              <span>Archive</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onDelete(conversation.id);
+                                setMenuOpenId(null);
+                              }}
+                              className="
+                                w-full
+                                px-3 py-2
+                                text-left
+                                text-gray-300
+                                hover:bg-white/[0.07]
+                                flex items-center gap-2
+                              "
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-gray-400" />
+                              <span>Delete</span>
+                            </button>
+
+                          </div>
+                        )}
+
+                      </div>
+                    )}
+
+                  </div>
+
+                </div>
+
+              </div>
+            );
+          })
+        )}
+
+      </div>
+
+      {/* User Profile & Footer */}
+      <div className="p-3 border-t border-white/10 bg-[#050505]">
+
+        <div className="flex items-center justify-between gap-2 mb-3">
+
+          <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
+
+            <div
+              className="
+                w-9 h-9
+                rounded-full
+                bg-white/10
+                border border-white/10
+                text-white
+                text-xs
+                font-semibold
+                flex items-center justify-center
+                shrink-0
+              "
+            >
+              {user?.name?.[0] || 'T'}
+            </div>
+
+            <div className="overflow-hidden min-w-0">
+
+              <div className="text-sm font-medium text-white truncate">
+                {user?.name || 'Teacher'}
+              </div>
+
+              <div className="text-xs text-gray-500 truncate">
+                {user?.role || 'Educator'}
+              </div>
+
+            </div>
+
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+
+            <Link
+              to="/settings"
+              className="
+                p-2
+                rounded-lg
+                text-gray-400
+                hover:text-white
+                hover:bg-white/10
+                transition-colors
+              "
+              title="Settings"
+              aria-label="Settings"
+            >
+              <Settings className="w-4 h-4" />
+            </Link>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="
+                p-2
+                rounded-lg
+                text-gray-400
+                hover:text-white
+                hover:bg-white/10
+                transition-colors
+              "
+              title="Sign Out"
+              aria-label="Sign Out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </aside>
+  );
+};
+
+========== .\frontend\src\components\workspace\ChatWindow.tsx ==========
+
+import React, { useRef, useEffect } from 'react';
+import { Conversation, QuickActionItem } from '../../types/chat';
+import { WorkflowType } from '../../types/workflow';
+import type { MessageAttachmentInput } from '../../services/api';
+import { ChatMessageItem } from './ChatMessageItem';
+import { MessageComposer, type WorkspaceSourceMode } from './MessageComposer';
+import { TCOAnimatedLogo } from '../marketing/TCOAnimatedLogo';
+import { ClarificationBar } from './ClarificationBar';
+import { ApprovalBar } from './ApprovalBar';
+import {
+  FileCheck2,
+  FileSpreadsheet,
+  Users2,
+  Table,
+  Presentation,
+  BarChart3,
+  Eye,
+  PanelRightClose,
+  PanelRightOpen,
+  Menu,
+} from 'lucide-react';
+
+interface ChatWindowProps {
+  conversation: Conversation | null;
+  isProcessing: boolean;
+  onSendMessage: (
+    message: string,
+    attachments?: MessageAttachmentInput[],
+    sourceMode?: WorkspaceSourceMode
+  ) => void;
+  onClarification: (optionId: string, customValue?: string) => void;
+  onApprove: (notes?: string) => void;
+  onRequestRevision: (instructions: string) => void;
+  onOpenReview: (type: WorkflowType, id?: string) => void;
+  onStopProcessing: () => void;
+  isReviewPanelOpen: boolean;
+  onToggleReviewPanel: () => void;
+  onOpenMobileSidebar?: () => void;
+}
+
+const QUICK_ACTIONS: QuickActionItem[] = [
+  {
+    id: 'qa-check',
+    title: 'Check Answer Sheets',
+    description: 'Digitize, extract & verify student handwriting against rubric',
+    iconName: 'FileCheck2',
+    prompt: 'Check these answer sheets for the Data Structures & DBMS Unit Test.',
+    workflowType: 'answer_sheet_checking',
+  },
+  {
+    id: 'qa-paper',
+    title: 'Create Question Paper',
+    description: "Generate structured exam questions balanced by Bloom's Taxonomy",
+    iconName: 'FileSpreadsheet',
+    prompt: 'Create a question paper for Operating Systems with 20 questions (50 Marks).',
+    workflowType: 'question_paper_generation',
+  },
+  {
+    id: 'qa-ppt',
+    title: 'Generate PPT',
+    description: 'Create 12-slide lecture presentation outline with speaker notes',
+    iconName: 'Presentation',
+    prompt: 'Make a PPT on Operating Systems & Concurrency Architecture for tomorrow.',
+    workflowType: 'ppt_generation',
+  },
+  {
+    id: 'qa-attendance',
+    title: 'Take Attendance',
+    description: 'Reconcile sign-in sheets and roster logs without surveillance',
+    iconName: 'Users2',
+    prompt: "Mark attendance for today's CS-301 lecture and flag ambiguous entries.",
+    workflowType: 'attendance',
+  },
+  {
+    id: 'qa-marksheet',
+    title: 'Create Marksheet',
+    description: 'Aggregate scores, calculate percentage tiers, and export records',
+    iconName: 'Table',
+    prompt: 'Compile and format the midterm marksheet for CSE Section B.',
+    workflowType: 'marksheet',
+  },
+  {
+    id: 'qa-analytics',
+    title: 'Analyze Class',
+    description: 'Pinpoint weak topics, score distributions, and mastery gaps',
+    iconName: 'BarChart3',
+    prompt: 'Analyze my class performance for the recent unit assessment.',
+    workflowType: 'analytics',
+  },
+];
+
+export const ChatWindow: React.FC<ChatWindowProps> = ({
+  conversation,
+  isProcessing,
+  onSendMessage,
+  onClarification,
+  onApprove,
+  onRequestRevision,
+  onOpenReview,
+  onStopProcessing,
+  isReviewPanelOpen,
+  onToggleReviewPanel,
+  onOpenMobileSidebar,
+}) => {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom as messages stream in
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [conversation?.messages, isProcessing]);
+
+  // Get the latest message's active clarification or approval
+  const lastMsg =
+    conversation?.messages[conversation.messages.length - 1];
+
+  const activeClarification = lastMsg?.clarification;
+
+  const activeApproval =
+    lastMsg?.approval ||
+    (lastMsg?.workflowProgress?.approval
+      ? lastMsg.workflowProgress.approval
+      : undefined);
+
+  const getActionIcon = (iconName: string) => {
+    const iconClass = 'h-5 w-5 text-white/75';
+
+    switch (iconName) {
+      case 'FileCheck2':
+        return <FileCheck2 className={iconClass} />;
+      case 'FileSpreadsheet':
+        return <FileSpreadsheet className={iconClass} />;
+      case 'Presentation':
+        return <Presentation className={iconClass} />;
+      case 'Users2':
+        return <Users2 className={iconClass} />;
+      case 'Table':
+        return <Table className={iconClass} />;
+      case 'BarChart3':
+      default:
+        return <BarChart3 className={iconClass} />;
+    }
+  };
+
+  return (
+    <div className="relative flex h-full flex-1 select-text flex-col overflow-hidden bg-black font-sans">
+      {/* Top Header */}
+      <header className="z-10 flex h-16 shrink-0 items-center justify-between border-b border-white/10 bg-black/90 px-4 backdrop-blur-md sm:px-6">
+        <div className="flex min-w-0 items-center gap-3">
+          {onOpenMobileSidebar && (
+            <button
+              onClick={onOpenMobileSidebar}
+              className="rounded-lg p-2 text-white/60 transition-colors hover:bg-white/10 hover:text-white lg:hidden"
+              aria-label="Open sidebar"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+          )}
+
+          <TCOAnimatedLogo
+            variant="workspace"
+            active={isProcessing}
+            className="tco-animated-logo-header shrink-0"
+          />
+
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="max-w-[220px] truncate text-sm font-semibold tracking-tight text-white sm:max-w-md">
+                {conversation?.title || 'Teacher Workspace'}
+              </h1>
+
+              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                isProcessing
+                  ? 'border-white/35 bg-white/10 text-white'
+                  : 'border-white/15 bg-white/5 text-white/60'
+              }`}>
+                {isProcessing ? 'TCO Working' : 'TCO Ready'}
+              </span>
+            </div>
+
+            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-white/45">
+              <span className="h-1.5 w-1.5 rounded-full bg-white/70" />
+              <span>{isProcessing ? 'TCO is working on your task…' : 'Ready · Teacher Co-Worker'}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Header Actions */}
+        <div className="ml-2 flex shrink-0 items-center gap-2">
+          {conversation?.activeWorkflowType && (
+            <button
+              onClick={() =>
+                onOpenReview(conversation.activeWorkflowType!)
+              }
+              className="hidden items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-white/70 transition-colors hover:bg-white/10 hover:text-white sm:flex"
+            >
+              <Eye className="h-3.5 w-3.5" />
+              <span>View Review</span>
+            </button>
+          )}
+
+          <button
+            onClick={onToggleReviewPanel}
+            className={`rounded-lg border p-2 transition-colors ${
+              isReviewPanelOpen
+                ? 'border-white/25 bg-white text-black'
+                : 'border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white'
+            }`}
+            title={
+              isReviewPanelOpen
+                ? 'Hide Review Panel'
+                : 'Show Review Panel'
+            }
+            aria-label={
+              isReviewPanelOpen
+                ? 'Hide Review Panel'
+                : 'Show Review Panel'
+            }
+          >
+            {isReviewPanelOpen ? (
+              <PanelRightClose className="h-4 w-4" />
+            ) : (
+              <PanelRightOpen className="h-4 w-4" />
+            )}
+          </button>
+        </div>
+      </header>
+
+      {/* Chat Scroll Area */}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto p-3 sm:p-6"
+      >
+        {!conversation || conversation.messages.length === 0 ? (
+          /* Fresh Workspace */
+          <div className="mx-auto flex max-w-3xl flex-col space-y-8 px-2 py-10 text-center sm:px-4 sm:py-12">
+            <div className="mx-auto -mb-3 flex items-center justify-center" aria-label={isProcessing ? 'TCO is processing your task' : 'TCO is ready'}>
+              <TCOAnimatedLogo variant="workspace" active={isProcessing} />
+            </div>
+
+            <div className="space-y-3">
+              <h2 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+                Good morning, Teacher.
+              </h2>
+
+              <p className="mx-auto max-w-lg text-sm leading-relaxed text-white/55 sm:text-base">
+                What would you like TCO to handle today? Start a conversation
+                or choose a workflow below.
+              </p>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="grid grid-cols-1 gap-3 text-left sm:grid-cols-2 md:grid-cols-3">
+              {QUICK_ACTIONS.map((action) => (
+                <button
+                  key={action.id}
+                  onClick={() => onSendMessage(action.prompt)}
+                  className="group flex flex-col justify-between rounded-xl border border-white/10 bg-[#0b0b0b] p-4 text-left transition-colors hover:border-white/25 hover:bg-[#141414]"
+                >
+                  <div>
+                    <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] transition-colors group-hover:bg-white/10">
+                      {getActionIcon(action.iconName)}
+                    </div>
+
+                    <h3 className="text-sm font-medium text-white">
+                      {action.title}
+                    </h3>
+
+                    <p className="mt-1.5 text-xs leading-relaxed text-white/45">
+                      {action.description}
+                    </p>
+                  </div>
+
+                  <div className="mt-5 flex items-center justify-between border-t border-white/[0.08] pt-3 text-[11px]">
+                    <span className="text-white/35">
+                      Quick Action
+                    </span>
+
+                    <span className="text-white/70 transition-colors group-hover:text-white">
+                      Start →
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <p className="pt-1 text-xs text-white/35">
+              Teacher Co-Worker · Every grade requires teacher approval.
+            </p>
+          </div>
+        ) : (
+          /* Active Chat */
+          <div className="mx-auto max-w-4xl space-y-4">
+            {conversation.messages.map((msg) => (
+              <ChatMessageItem
+                key={msg.id}
+                message={msg}
+                onOpenReview={onOpenReview}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Clarification */}
+      {activeClarification && (
+        <ClarificationBar
+          clarification={activeClarification}
+          onSelectOption={onClarification}
+          disabled={isProcessing}
+        />
+      )}
+
+      {/* Approval */}
+      {activeApproval && (
+        <ApprovalBar
+          approval={activeApproval}
+          onOpenReview={onOpenReview}
+          onApprove={onApprove}
+          onRequestRevision={onRequestRevision}
+          disabled={isProcessing}
+        />
+      )}
+
+      {/* Message Composer */}
+      <MessageComposer
+        onSend={onSendMessage}
+        isProcessing={isProcessing}
+        onStop={onStopProcessing}
+      />
+    </div>
+  );
+};
+
+========== .\frontend\src\components\workspace\ChatMessageItem.tsx ==========
+
+import React from 'react';
+import { motion } from 'framer-motion';
+import { ChatMessage } from '../../types/chat';
+import { WorkflowType } from '../../types/workflow';
+import { ProcessTimeline } from './ProcessTimeline';
+import {
+  FileText,
+  Eye,
+  Sparkles,
+  User,
+} from 'lucide-react';
+
+interface ChatMessageItemProps {
+  message: ChatMessage;
+  onOpenReview?: (type: WorkflowType, id?: string) => void;
+}
+
+export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
+  message,
+  onOpenReview,
+}) => {
+  const isTeacher = message.sender === 'teacher';
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25 }}
+      className={`flex gap-3 px-3 py-3 sm:px-4 ${
+        isTeacher ? 'justify-end' : 'justify-start'
+      }`}
+    >
+      {/* TCO Avatar */}
+      {!isTeacher && (
+        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-white text-[10px] font-bold text-black">
+          TCO
+        </div>
+      )}
+
+      {/* Message Container */}
+      <div
+        className={`flex max-w-[88%] flex-col gap-2 sm:max-w-[80%] md:max-w-[72%] ${
+          isTeacher ? 'items-end' : 'items-start'
+        }`}
+      >
+        {/* Author and Timestamp */}
+        <div
+          className={`flex flex-wrap items-center gap-2 text-[11px] ${
+            isTeacher ? 'justify-end' : 'justify-start'
+          }`}
+        >
+          <span className="font-medium text-white/80">
+            {isTeacher ? 'You' : 'TCO Master Agent'}
+          </span>
+
+          <span className="text-white/40">
+            {message.timestamp}
+          </span>
+        </div>
+
+        {/* Message Bubble */}
+        <div
+          className={`rounded-2xl p-4 text-sm leading-relaxed ${
+            isTeacher
+              ? 'rounded-tr-sm bg-white text-black'
+              : 'rounded-tl-sm border border-white/10 bg-[#111111] text-white/90'
+          }`}
+        >
+          {/* Message Text */}
+          <div className="whitespace-pre-line break-words">
+            {message.content}
+          </div>
+
+          {/* Attachments */}
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="mt-3 space-y-2 border-t border-white/10 pt-3">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
+                Attached Exam Material
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {message.attachments.map((att, i) => (
+                  <div
+                    key={i}
+                    className={`flex max-w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
+                      isTeacher
+                        ? 'border-black/10 bg-black/5 text-black/80'
+                        : 'border-white/10 bg-white/[0.04] text-white/80'
+                    }`}
+                  >
+                    <FileText
+                      className={`h-4 w-4 shrink-0 ${
+                        isTeacher ? 'text-black' : 'text-white/70'
+                      }`}
+                    />
+
+                    <span className="max-w-[180px] truncate">
+                      {att.name}
+                    </span>
+
+                    <span
+                      className={`shrink-0 text-[10px] ${
+                        isTeacher ? 'text-black/50' : 'text-white/40'
+                      }`}
+                    >
+                      ({att.size})
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Workflow Timeline */}
+          {message.workflowProgress && (
+            <ProcessTimeline progress={message.workflowProgress} />
+          )}
+
+          {/* Review Panel Action */}
+          {message.reviewType && onOpenReview && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
+              <div className="flex items-center gap-2 text-xs text-white/60">
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>Ready for teacher review</span>
+              </div>
+
+              <button
+                onClick={() =>
+                  onOpenReview(message.reviewType!, message.reviewDataId)
+                }
+                className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-white/10"
+              >
+                <Eye className="h-3.5 w-3.5" />
+                <span>Open Review Panel</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Teacher Avatar */}
+      {isTeacher && (
+        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-[#171717] text-white">
+          <User className="h-4 w-4" />
+        </div>
+      )}
+    </motion.div>
+  );
+};
+
+========== .\frontend\src\components\workspace\MessageComposer.tsx ==========
+
+
+import React, { useState, useRef, useEffect } from 'react';
+import type { MessageAttachmentInput } from '../../services/api';
+import {
+  ArrowUp,
+  Paperclip,
+  Mic,
+  Square,
+  FileText,
+  X,
+  Database,
+  Globe,
+  GraduationCap,
+  Brain,
+} from 'lucide-react';
+
+export type WorkspaceSourceMode =
+  | 'general_knowledge'
+  | 'teacher_file'
+  | 'classroom'
+  | 'web_search';
+
+interface MessageComposerProps {
+  onSend: (
+    message: string,
+    attachments?: MessageAttachmentInput[],
+    sourceMode?: WorkspaceSourceMode,
+  ) => void;
+  isProcessing: boolean;
+  onStop: () => void;
+  disabled?: boolean;
+}
+
+const SOURCE_OPTIONS: {
+  value: WorkspaceSourceMode;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: 'general_knowledge',
+    label: 'General Knowledge',
+    description: 'Use general AI knowledge without a reference source',
+  },
+  {
+    value: 'teacher_file',
+    label: 'Teacher File + RAG',
+    description: 'Ground the response in your uploaded reference files',
+  },
+  {
+    value: 'classroom',
+    label: 'Google Classroom + RAG',
+    description: 'Use relevant content from Google Classroom',
+  },
+  {
+    value: 'web_search',
+    label: 'Web Search + RAG',
+    description: 'Find relevant web sources for the task',
+  },
+];
+
+export const MessageComposer: React.FC<MessageComposerProps> = ({
+  onSend,
+  isProcessing,
+  onStop,
+  disabled = false,
+}) => {
+  const [content, setContent] = useState('');
+  const [attachments, setAttachments] = useState<MessageAttachmentInput[]>([]);
+  const [sourceMode, setSourceMode] =
+    useState<WorkspaceSourceMode>('general_knowledge');
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!textareaRef.current) return;
+
+    textareaRef.current.style.height = 'auto';
+    const scrollHeight = textareaRef.current.scrollHeight;
+
+    textareaRef.current.style.height = `${Math.min(
+      scrollHeight,
+      180,
+    )}px`;
+  }, [content]);
+
+  const handleKeyDown = (
+    event: React.KeyboardEvent<HTMLTextAreaElement>,
+  ) => {
+    if (
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  const handleSubmit = () => {
+    if (
+      (!content.trim() && attachments.length === 0) ||
+      isProcessing ||
+      disabled
+    ) {
+      return;
+    }
+
+    // Pass the selected source mode through the callback.
+    // The next integration step connects it to the FastAPI request.
+    onSend(content.trim(), attachments, sourceMode);
+
+    setContent('');
+    setAttachments([]);
+
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const handleFilesSelected = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const selected = Array.from(event.target.files || []);
+
+    if (selected.length > 0) {
+      setAttachments((previous) => [
+        ...previous,
+        ...selected.map((file) => ({
+          name: file.name,
+          size: formatFileSize(file.size),
+          type: file.type || 'application/octet-stream',
+          file,
+        })),
+      ]);
+    }
+
+    // Allow selecting the same file after removing it.
+    event.target.value = '';
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments((previous) =>
+      previous.filter((_, itemIndex) => itemIndex !== index),
+    );
+  };
+
+  const canSend =
+    (content.trim().length > 0 || attachments.length > 0) &&
+    !isProcessing &&
+    !disabled;
+
+  const selectedSource = SOURCE_OPTIONS.find(
+    (option) => option.value === sourceMode,
+  );
+
+  const getSourceIcon = () => {
+    switch (sourceMode) {
+      case 'teacher_file':
+        return <FileText className="h-4 w-4" />;
+      case 'classroom':
+        return <GraduationCap className="h-4 w-4" />;
+      case 'web_search':
+        return <Globe className="h-4 w-4" />;
+      default:
+        return <Brain className="h-4 w-4" />;
+    }
+  };
+
+  return (
+    <div className="relative z-10 border-t border-white/[0.06] bg-black px-3 py-3 sm:px-4 sm:py-4">
+      <div className="mx-auto max-w-4xl">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg,.webp,.xlsx,.csv"
+          className="hidden"
+          onChange={handleFilesSelected}
+        />
+
+        {/* Attachment chips */}
+        {attachments.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-2 px-1">
+            {attachments.map((attachment, index) => (
+              <div
+                key={`${attachment.name}-${index}`}
+                className="flex max-w-full items-center gap-2 rounded-lg border border-white/10 bg-[#111111] px-3 py-2 text-xs text-white/80"
+              >
+                <FileText className="h-4 w-4 shrink-0 text-white/60" />
+
+                <span className="max-w-[180px] truncate">
+                  {attachment.name}
+                </span>
+
+                <span className="shrink-0 text-[10px] text-white/40">
+                  ({attachment.size})
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(index)}
+                  disabled={disabled || isProcessing}
+                  className="ml-1 rounded p-0.5 text-white/40 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+                  aria-label={`Remove ${attachment.name}`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Composer */}
+        <div className="rounded-2xl border border-white/10 bg-[#0c0c0c] p-2 transition-colors focus-within:border-white/25">
+          {/* Source selection */}
+          <div className="flex flex-col gap-2 border-b border-white/[0.07] px-2 pb-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/70">
+                {getSourceIcon()}
+              </div>
+
+              <div className="min-w-0">
+                <label
+                  htmlFor="tco-source-mode"
+                  className="block text-[11px] font-medium text-white/80"
+                >
+                  Knowledge source
+                </label>
+
+                <p className="mt-0.5 text-[10px] text-white/40">
+                  {selectedSource?.description}
+                </p>
+              </div>
+            </div>
+
+            <select
+              id="tco-source-mode"
+              value={sourceMode}
+              onChange={(event) =>
+                setSourceMode(event.target.value as WorkspaceSourceMode)
+              }
+              disabled={disabled || isProcessing}
+              className="w-full rounded-lg border border-white/10 bg-[#151515] px-3 py-2 text-xs text-white outline-none transition-colors focus:border-white/30 disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-[230px]"
+            >
+              {SOURCE_OPTIONS.map((option) => (
+                <option
+                  key={option.value}
+                  value={option.value}
+                  className="bg-[#151515] text-white"
+                >
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Message input */}
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={disabled || isProcessing}
+            placeholder="Message TCO..."
+            className="max-h-[180px] min-h-[44px] w-full resize-none bg-transparent px-3 pb-2 pt-3 text-sm leading-relaxed text-white outline-none placeholder:text-white/35 disabled:cursor-not-allowed"
+          />
+
+          {/* Bottom controls */}
+          <div className="mt-1 flex items-center justify-between border-t border-white/[0.07] px-1 pt-2">
+            <div className="flex min-w-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled || isProcessing}
+                className="rounded-lg p-2 text-white/50 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                title="Attach exam materials"
+                aria-label="Attach exam materials"
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setContent((previous) =>
+                    previous
+                      ? `${previous} (voice command)`
+                      : 'Check these answer sheets',
+                  )
+                }
+                disabled={disabled || isProcessing}
+                className="rounded-lg p-2 text-white/50 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                title="Voice dictation (simulated)"
+                aria-label="Voice dictation"
+              >
+                <Mic className="h-4 w-4" />
+              </button>
+
+              <span className="ml-2 hidden text-[11px] text-white/35 sm:inline">
+                Shift + Enter for new line
+              </span>
+            </div>
+
+            {/* Send / Stop */}
+            <div className="flex shrink-0 items-center gap-2">
+              {isProcessing ? (
+                <button
+                  type="button"
+                  onClick={onStop}
+                  className="flex items-center gap-2 rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-white/15"
+                >
+                  <Square className="h-3 w-3 fill-current" />
+                  <span>Stop</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={!canSend}
+                  className={`flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
+                    canSend
+                      ? 'bg-white text-black hover:bg-white/85'
+                      : 'cursor-not-allowed bg-white/[0.06] text-white/25'
+                  }`}
+                  title="Send message"
+                  aria-label="Send message"
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <p className="mt-2 text-center text-[10px] text-white/30">
+          AI assists. Teachers decide.
+        </p>
+      </div>
+    </div>
+  );
+};
+
+========== .\frontend\src\components\workspace\ApprovalBar.tsx ==========
+
+import React, { useState } from 'react';
+import { ApprovalRequest, WorkflowType } from '../../types/workflow';
+import {
+  ShieldCheck,
+  Eye,
+  ThumbsUp,
+  RotateCcw,
+  Check,
+  Sparkles,
+  X,
+} from 'lucide-react';
+
+interface ApprovalBarProps {
+  approval: ApprovalRequest;
+  onOpenReview: (type: WorkflowType) => void;
+  onApprove: (notes?: string) => void;
+  onRequestRevision: (instructions: string) => void;
+  disabled?: boolean;
+}
+
+export const ApprovalBar: React.FC<ApprovalBarProps> = ({
+  approval,
+  onOpenReview,
+  onApprove,
+  onRequestRevision,
+  disabled = false,
+}) => {
+  const [showRevisionInput, setShowRevisionInput] = useState(false);
+  const [revisionNote, setRevisionNote] = useState('');
+
+  const handleRevisionSubmit = () => {
+    const instruction = revisionNote.trim();
+
+    if (!instruction || disabled) return;
+
+    onRequestRevision(instruction);
+    setRevisionNote('');
+    setShowRevisionInput(false);
+  };
+
+  const handleRevisionCancel = () => {
+    setShowRevisionInput(false);
+    setRevisionNote('');
+  };
+
+  return (
+    <div className="mx-4 mb-3 space-y-4 rounded-2xl border border-white/10 bg-[#0b0b0b] p-4">
+      {/* Header */}
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] text-white/75">
+            <ShieldCheck className="h-5 w-5" />
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="rounded-md border border-white/15 bg-white/[0.05] px-2 py-1 text-[9px] font-semibold uppercase tracking-wider text-white/70">
+                Action Required
+              </span>
+
+              <span className="text-[11px] font-medium text-white/45">
+                Teacher Decision Checkpoint
+              </span>
+            </div>
+
+            <h4 className="text-sm font-semibold leading-relaxed text-white">
+              {approval.title}
+            </h4>
+
+            <p className="mt-1 text-xs leading-relaxed text-white/50">
+              {approval.summary}
+            </p>
+          </div>
+        </div>
+
+        {/* Quick Metrics */}
+        {approval.metrics && approval.metrics.length > 0 && (
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.02] p-2">
+            {approval.metrics.map((metric, index) => (
+              <div
+                key={`${metric.label}-${index}`}
+                className={`min-w-[60px] px-2 text-center ${
+                  index !== approval.metrics!.length - 1
+                    ? 'border-r border-white/10'
+                    : ''
+                }`}
+              >
+                <span className="block text-[9px] uppercase tracking-wider text-white/40">
+                  {metric.label}
+                </span>
+
+                <span className="mt-1 block font-mono text-xs font-semibold text-white/85">
+                  {metric.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Revision Input */}
+      {showRevisionInput && (
+        <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+          <div className="flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05]">
+              <Sparkles className="h-3.5 w-3.5 text-white/70" />
+            </div>
+
+            <div>
+              <h5 className="text-xs font-semibold text-white/85">
+                Request Changes
+              </h5>
+
+              <p className="mt-0.5 text-[10px] text-white/40">
+                Describe what TCO should improve or modify.
+              </p>
+            </div>
+          </div>
+
+          <textarea
+            value={revisionNote}
+            onChange={(event) => setRevisionNote(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                event.key === 'Enter' &&
+                !event.shiftKey &&
+                !event.nativeEvent.isComposing
+              ) {
+                event.preventDefault();
+                handleRevisionSubmit();
+              }
+            }}
+            placeholder="e.g. Make questions 5 and 7 harder, or adjust the rubric to award partial credit..."
+            rows={3}
+            disabled={disabled}
+            className="w-full resize-y rounded-lg border border-white/10 bg-black px-3 py-2.5 text-xs leading-relaxed text-white outline-none transition-colors placeholder:text-white/25 focus:border-white/30 disabled:cursor-not-allowed disabled:opacity-50"
+          />
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[10px] text-white/35">
+              Enter to submit · Shift + Enter for a new line
+            </span>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleRevisionCancel}
+                disabled={disabled}
+                className="rounded-lg border border-white/10 px-3 py-2 text-[11px] font-medium text-white/55 transition-colors hover:bg-white/[0.05] hover:text-white disabled:opacity-40"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleRevisionSubmit}
+                disabled={disabled || !revisionNote.trim()}
+                className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-[11px] font-semibold text-black transition-colors hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Send Instructions
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Decision Buttons */}
+      <div className="flex flex-col gap-2 border-t border-white/[0.08] pt-3 sm:flex-row sm:flex-wrap sm:items-center">
+        {/* Open Review */}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onOpenReview(approval.reviewType)}
+          className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-xs font-medium text-white/75 transition-colors hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-40 sm:justify-start"
+        >
+          <Eye className="h-3.5 w-3.5" />
+          <span>Open Review Panel</span>
+        </button>
+
+        {/* Approve */}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onApprove()}
+          className="flex min-w-[140px] flex-1 items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-semibold text-black transition-colors hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <ThumbsUp className="h-3.5 w-3.5" />
+          <span>Approve Outcome</span>
+        </button>
+
+        {/* Request Revision */}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => setShowRevisionInput((previous) => !previous)}
+          className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 sm:justify-start ${
+            showRevisionInput
+              ? 'border-white/20 bg-white/[0.08] text-white'
+              : 'border-white/10 bg-transparent text-white/55 hover:bg-white/[0.05] hover:text-white'
+          }`}
+        >
+          {showRevisionInput ? (
+            <X className="h-3.5 w-3.5" />
+          ) : (
+            <RotateCcw className="h-3.5 w-3.5" />
+          )}
+
+          <span>{showRevisionInput ? 'Close Editor' : 'Ask for Changes'}</span>
+        </button>
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center gap-2 text-[10px] text-white/35">
+        <Check className="h-3 w-3 shrink-0" />
+        <span>AI assists. Teachers decide.</span>
+      </div>
+    </div>
+  );
+};
+
+========== .\frontend\src\hooks\useChat.ts ==========
+
+
+import { useState, useCallback, useEffect } from 'react';
+import type { Conversation, ChatMessage, QuickActionItem } from '../types/chat';
+import type { WorkflowType } from '../types/workflow';
+import { api } from '../services/api';
+import type { MessageAttachmentInput, WorkspaceSourceMode } from '../services/api';
+import { errorMessage } from '../services/http';
+
+export function useChat(initialConversationId?: string) {
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    initialConversationId || null,
+  );
+  const [activeConversation, setActiveConversation] =
+    useState<Conversation | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [activeReviewType, setActiveReviewType] =
+    useState<WorkflowType | null>(null);
+  const [activeReviewId, setActiveReviewId] = useState<string | null>(null);
+  const [isReviewPanelOpen, setIsReviewPanelOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load the conversation list without automatically selecting an old chat.
+  const refreshConversations = useCallback(async () => {
+    try {
+      const list = await api.getConversations();
+      setConversations(list);
+    } catch (err) {
+      console.error('Failed to load conversations:', err);
+      setError(errorMessage(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshConversations();
+  }, [refreshConversations]);
+
+  // Load the selected conversation and discard state belonging to the old one.
+  useEffect(() => {
+    let isMounted = true;
+
+    setActiveConversation(null);
+    setActiveReviewType(null);
+    setActiveReviewId(null);
+    setIsReviewPanelOpen(false);
+
+    if (!activeConversationId) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    api
+      .getConversation(activeConversationId)
+      .then((conversation) => {
+        if (!isMounted) return;
+
+        if (!conversation) {
+          setActiveConversation(null);
+          return;
+        }
+
+        setActiveConversation(conversation);
+
+        const lastMessage =
+          conversation.messages[conversation.messages.length - 1];
+
+        if (lastMessage?.reviewType) {
+          setActiveReviewType(lastMessage.reviewType);
+          setActiveReviewId(lastMessage.reviewDataId || null);
+
+          const state = lastMessage.workflowProgress?.state;
+          const reviewPending = [
+            'review_required',
+            'assessment_ready_for_teacher',
+            'assessment_ready_for_review',
+          ].includes(String(state || ''));
+
+          setIsReviewPanelOpen(reviewPending);
+        } else {
+          setActiveReviewType(null);
+          setActiveReviewId(null);
+          setIsReviewPanelOpen(false);
+        }
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        console.error('Failed to load conversation:', err);
+        setError(errorMessage(err));
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeConversationId]);
+
+  const selectConversation = useCallback((id: string) => {
+    setError(null);
+    setActiveReviewType(null);
+    setActiveReviewId(null);
+    setIsReviewPanelOpen(false);
+    setActiveConversation(null);
+    setActiveConversationId(id);
+  }, []);
+
+  const createNewChat = useCallback(async () => {
+    setIsProcessing(true);
+    setError(null);
+    setActiveReviewType(null);
+    setActiveReviewId(null);
+    setIsReviewPanelOpen(false);
+
+    try {
+      const newConversation = await api.createConversation('New Conversation');
+
+      // Switch to the new conversation immediately.
+      setActiveConversationId(newConversation.id);
+      setActiveConversation(newConversation);
+      setConversations((previous) => [
+        newConversation,
+        ...previous.filter((item) => item.id !== newConversation.id),
+      ]);
+    } catch (err) {
+      console.error('Failed to create conversation:', err);
+      setError(errorMessage(err));
+    } finally {
+      setIsProcessing(false);
+    }
+  }, []);
+
+  const sendMessage = useCallback(
+    async (content: string, attachments?: MessageAttachmentInput[], sourceMode?: WorkspaceSourceMode) => {
+      if (!content.trim() && (!attachments || attachments.length === 0)) {
+        return;
+      }
+
+      setError(null);
+      // Start the workspace TCO activity animation immediately when a task is submitted,
+      // including the initial conversation-creation request.
+      setIsProcessing(true);
+
+      let targetConversationId = activeConversationId;
+
+      try {
+        if (!targetConversationId) {
+          const newConversation = await api.createConversation(
+            content.trim().slice(0, 30) || 'New Conversation',
+          );
+
+          targetConversationId = newConversation.id;
+          setActiveConversationId(newConversation.id);
+          setActiveConversation(newConversation);
+          setConversations((previous) => [
+            newConversation,
+            ...previous.filter((item) => item.id !== newConversation.id),
+          ]);
+        }
+
+        const optimisticMessage: ChatMessage = {
+          id: `optimistic-${Date.now()}`,
+          sender: 'teacher',
+          timestamp: new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+          content,
+          attachments: attachments?.map((attachment, index) => ({
+            id: `upload-${Date.now()}-${index}`,
+            name: attachment.name,
+            size: attachment.size,
+            type: attachment.type,
+          })),
+        };
+
+        setActiveConversation((previous) => {
+          if (!previous || previous.id !== targetConversationId) {
+            return previous;
+          }
+
+          return {
+            ...previous,
+            messages: [...previous.messages, optimisticMessage],
+          };
+        });
+
+        const { tcoMessage } = await api.sendMessage(
+          targetConversationId,
+          content,
+          attachments,
+          sourceMode,
+        );
+
+        setActiveConversation((previous) => {
+          if (!previous || previous.id !== targetConversationId) {
+            return previous;
+          }
+
+          const cleanMessages = previous.messages.filter(
+            (message) => message.id !== optimisticMessage.id,
+          );
+
+          return {
+            ...previous,
+            messages: [...cleanMessages, optimisticMessage, tcoMessage],
+            status:
+              tcoMessage.workflowProgress?.state === 'review_required'
+                ? 'In Review'
+                : previous.status,
+          };
+        });
+
+        if (tcoMessage.reviewType) {
+          setActiveReviewType(tcoMessage.reviewType);
+          setActiveReviewId(tcoMessage.reviewDataId || null);
+
+          const state = tcoMessage.workflowProgress?.state;
+          const reviewPending = [
+            'review_required',
+            'assessment_ready_for_teacher',
+            'assessment_ready_for_review',
+          ].includes(String(state || ''));
+
+          setIsReviewPanelOpen(reviewPending);
+        } else {
+          setActiveReviewType(null);
+          setActiveReviewId(null);
+          setIsReviewPanelOpen(false);
+        }
+
+        await refreshConversations();
+      } catch (err) {
+        console.error('Failed to send message:', err);
+        setError(errorMessage(err));
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [activeConversationId, refreshConversations],
+  );
+
+  const handleClarification = useCallback(
+    async (optionId: string, customValue?: string) => {
+      if (!activeConversationId) return;
+
+      setIsProcessing(true);
+      setError(null);
+
+      try {
+        const { userMessage, tcoMessage } = await api.respondToClarification(
+          activeConversationId,
+          optionId,
+          customValue,
+        );
+
+        setActiveConversation((previous) => {
+          if (!previous || previous.id !== activeConversationId) {
+            return previous;
+          }
+
+          return {
+            ...previous,
+            messages: [...previous.messages, userMessage, tcoMessage],
+            status: 'In Review',
+          };
+        });
+
+        if (tcoMessage.reviewType) {
+          setActiveReviewType(tcoMessage.reviewType);
+          setActiveReviewId(tcoMessage.reviewDataId || null);
+          setIsReviewPanelOpen(true);
+        }
+
+        await refreshConversations();
+      } catch (err) {
+        console.error('Clarification error:', err);
+        setError(errorMessage(err));
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [activeConversationId, refreshConversations],
+  );
+
+  // Prefer the ID associated with the currently selected review.
+  // Fall back to the latest workflow/review ID in this conversation.
+  const getCurrentReviewId = useCallback(() => {
+    if (activeReviewId && activeReviewId !== 'default') {
+      return activeReviewId;
+    }
+
+    const messages = activeConversation?.messages || [];
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+
+      if (
+        message.reviewDataId &&
+        message.reviewDataId !== 'default'
+      ) {
+        return message.reviewDataId;
+      }
+
+      if (message.workflowProgress?.workflowId) {
+        return message.workflowProgress.workflowId;
+      }
+    }
+
+    return null;
+  }, [activeConversation, activeReviewId]);
+
+  const handleApprove = useCallback(
+    async (notes?: string) => {
+      if (!activeConversation || !activeConversationId || !activeReviewType) {
+        setError('Select an assessment review before approving it.');
+        return;
+      }
+
+      const reviewId = getCurrentReviewId();
+
+      if (!reviewId) {
+        setError(
+          'Assessment ID is missing. Open the assessment review again before approving.',
+        );
+        return;
+      }
+
+      setIsProcessing(true);
+      setError(null);
+
+      try {
+        await api.approveWorkflow(
+          reviewId,
+          activeConversationId,
+          activeReviewType,
+          notes,
+        );
+
+        setActiveConversation((previous) => {
+          if (!previous || previous.id !== activeConversationId) {
+            return previous;
+          }
+
+          return {
+            ...previous,
+            status: 'Completed',
+          };
+        });
+
+        setIsReviewPanelOpen(false);
+        setActiveReviewType(null);
+        setActiveReviewId(null);
+
+        await refreshConversations();
+      } catch (err) {
+        console.error('Approval failed:', err);
+        setError(errorMessage(err));
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [
+      activeConversation,
+      activeConversationId,
+      activeReviewType,
+      getCurrentReviewId,
+      refreshConversations,
+    ],
+  );
+
+  const handleReject = useCallback(
+    async (reason?: string) => {
+      if (!activeConversationId) return;
+
+      const reviewId = getCurrentReviewId();
+
+      if (!reviewId) {
+        setError('Assessment ID is missing. Open the assessment review again.');
+        return;
+      }
+
+      setIsProcessing(true);
+      setError(null);
+
+      try {
+        await api.rejectWorkflow(reviewId, activeConversationId, reason);
+
+        setIsReviewPanelOpen(false);
+        setActiveReviewType(null);
+        setActiveReviewId(null);
+
+        await refreshConversations();
+      } catch (err) {
+        console.error('Rejection failed:', err);
+        setError(errorMessage(err));
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [activeConversationId, getCurrentReviewId, refreshConversations],
+  );
+
+  const handleRequestRevision = useCallback(
+    async (instructions: string) => {
+      if (!activeConversationId) return;
+
+      const reviewId = getCurrentReviewId();
+
+      if (!reviewId) {
+        setError('Assessment ID is missing. Open the assessment review again.');
+        return;
+      }
+
+      setIsProcessing(true);
+      setError(null);
+
+      try {
+        await api.requestRevision(
+          reviewId,
+          activeConversationId,
+          instructions,
+        );
+
+        setIsReviewPanelOpen(false);
+        setActiveReviewType(null);
+        setActiveReviewId(null);
+
+        await refreshConversations();
+      } catch (err) {
+        console.error('Revision request failed:', err);
+        setError(errorMessage(err));
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [activeConversationId, getCurrentReviewId, refreshConversations],
+  );
+
+  const handleQuickAction = useCallback(
+    (action: QuickActionItem) => {
+      void sendMessage(action.prompt);
+    },
+    [sendMessage],
+  );
+
+  const openReviewPanel = useCallback(
+    (type?: WorkflowType, id?: string) => {
+      if (type) setActiveReviewType(type);
+      if (id) setActiveReviewId(id);
+      setError(null);
+      setIsReviewPanelOpen(true);
+    },
+    [],
+  );
+
+  const closeReviewPanel = useCallback(() => {
+    setIsReviewPanelOpen(false);
+  }, []);
+
+  const stopProcessing = useCallback(() => {
+    setIsProcessing(false);
+  }, []);
+
+  const clearError = useCallback(() => {
+    setError(null);
+  }, []);
+
+  const renameConversation = useCallback(
+    async (id: string, newTitle: string) => {
+      try {
+        await api.renameConversation(id, newTitle);
+        await refreshConversations();
+      } catch (err) {
+        setError(errorMessage(err));
+      }
+    },
+    [refreshConversations],
+  );
+
+  const archiveConversation = useCallback(
+    async (id: string) => {
+      try {
+        await api.archiveConversation(id);
+        await refreshConversations();
+
+        if (activeConversationId === id) {
+          setActiveConversationId(null);
+          setActiveConversation(null);
+          setActiveReviewType(null);
+          setActiveReviewId(null);
+          setIsReviewPanelOpen(false);
+          setError(null);
+        }
+      } catch (err) {
+        setError(errorMessage(err));
+      }
+    },
+    [activeConversationId, refreshConversations],
+  );
+
+  const deleteConversation = useCallback(
+    async (id: string) => {
+      try {
+        await api.deleteConversation(id);
+        await refreshConversations();
+
+        if (activeConversationId === id) {
+          setActiveConversationId(null);
+          setActiveConversation(null);
+          setActiveReviewType(null);
+          setActiveReviewId(null);
+          setIsReviewPanelOpen(false);
+          setError(null);
+        }
+      } catch (err) {
+        setError(errorMessage(err));
+      }
+    },
+    [activeConversationId, refreshConversations],
+  );
+
+  return {
+    conversations,
+    activeConversation,
+    activeConversationId,
+    isProcessing,
+    isReviewPanelOpen,
+    error,
+    clearError,
+    activeReviewType,
+    activeReviewId,
+    selectConversation,
+    createNewChat,
+    sendMessage,
+    handleClarification,
+    handleApprove,
+    handleReject,
+    handleRequestRevision,
+    handleQuickAction,
+    openReviewPanel,
+    closeReviewPanel,
+    stopProcessing,
+    renameConversation,
+    archiveConversation,
+    deleteConversation,
+  };
+}
+
+
+========== .\frontend\src\services\http.ts ==========
+
+const DEFAULT_API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
+
+export function getApiBaseUrl(): string {
+  try {
+    const saved = localStorage.getItem('tco_user_preferences');
+    if (saved) {
+      const preferences = JSON.parse(saved) as { fastApiEndpoint?: string };
+      if (preferences.fastApiEndpoint?.trim()) return preferences.fastApiEndpoint.trim().replace(/\/$/, '');
+    }
+  } catch {
+    // Fall back to Vite environment configuration if local preferences are malformed.
+  }
+  return DEFAULT_API_BASE_URL;
+}
+
+export const API_BASE_URL = DEFAULT_API_BASE_URL;
+
+export class ApiError extends Error {
+  status: number;
+  detail?: unknown;
+
+  constructor(message: string, status: number, detail?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+export function getAccessToken(): string | null {
+  try {
+    return localStorage.getItem('tco_access_token');
+  } catch {
+    return null;
+  }
+}
+
+export function setAccessToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem('tco_access_token', token);
+    else localStorage.removeItem('tco_access_token');
+  } catch {
+    // localStorage can be unavailable in restricted browser contexts.
+  }
+}
+
+function extractErrorMessage(payload: unknown, fallback: string): string {
+  if (typeof payload === 'string' && payload.trim()) return payload;
+  if (payload && typeof payload === 'object') {
+    const object = payload as Record<string, unknown>;
+    const detail = object.detail ?? object.message ?? object.error;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    if (Array.isArray(detail)) {
+      return detail.map((item) => {
+        if (item && typeof item === 'object' && 'msg' in item) return String((item as { msg: unknown }).msg);
+        return String(item);
+      }).join('; ');
+    }
+  }
+  return fallback;
+}
+
+export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers || {});
+  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData;
+  if (init.body != null && !isFormData && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json');
+
+  const token = getAccessToken();
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+
+  let response: Response;
+  try {
+    const baseUrl = getApiBaseUrl();
+    response = await fetch(`${baseUrl}${path.startsWith('/') ? path : `/${path}`}`, {
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    throw new ApiError(
+      `Backend se connection nahi ho paya. Check karein ki FastAPI ${getApiBaseUrl()} par chal raha hai aur CORS enabled hai.`,
+      0,
+      error,
+    );
+  }
+
+  if (response.status === 204) return undefined as T;
+  const contentType = response.headers.get('content-type') || '';
+  let payload: unknown;
+  if (contentType.includes('application/json')) {
+    payload = await response.json().catch(() => null);
+  } else {
+    payload = await response.text().catch(() => '');
+  }
+
+  if (!response.ok) {
+    throw new ApiError(
+      extractErrorMessage(payload, `Backend request failed (${response.status})`),
+      response.status,
+      payload,
+    );
+  }
+  return payload as T;
+}
+
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return 'An unexpected error occurred. Please try again.';
+}

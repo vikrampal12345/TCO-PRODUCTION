@@ -1,0 +1,16 @@
+TCO + COPY CHECKER BACKEND MERGE OVERLAY
+
+This ZIP is a source overlay, not a complete replacement for your E:\TCO repository.
+
+1. Back up or commit the current E:\TCO working tree first.
+2. Extract/merge this ZIP into the E:\TCO repository root, preserving existing files not listed in this overlay. In particular, do not replace backend/app/main.py; it is a separate Resume Recommendation API from the supplied source snapshot.
+3. Activate your current TCO virtual environment and install the new direct dependencies if they are missing:
+   python -m pip install langgraph langchain-openai pydantic-settings
+4. Copy the COPY_CHECKER_* entries and TCO_CORS_ORIGINS from .env.example into your existing root .env only if needed. Do not overwrite existing credentials or copy secrets into source control.
+5. Start the integrated TCO API from the repository root:
+   python -m uvicorn backend.api.main:app --host 127.0.0.1 --port 8000 --reload
+6. Visit http://127.0.0.1:8000/docs. The copy-checking demo endpoint accepts question_paper (.txt), locked marking_scheme (.txt), answer_copy (.pdf), and pages=1 or 2.
+7. Run the focused tests:
+   python -m pytest tests/test_copy_checker_integration.py -v
+
+The frontend is intentionally not included or changed. The unified API has only been statically compiled and tested with the included focused tests in the build environment; the live LM Studio model call must still be validated on your machine.

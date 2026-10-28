@@ -61,6 +61,9 @@ def ask_teacher(
     print("\nTCO:")
     print(message)
 
+    if state.get("status") == "waiting_for_source_selection":
+        return state
+
     return {
         **state,
         "status": "waiting_for_teacher",
@@ -199,6 +202,9 @@ def route_after_master(
     # --------------------------------------------------------
 
     if next_action == "ask_teacher":
+        return "ask_teacher"
+
+    if next_action == "source_selection":
         return "ask_teacher"
 
     # --------------------------------------------------------

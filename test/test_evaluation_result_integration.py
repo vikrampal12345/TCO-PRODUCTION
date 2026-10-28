@@ -246,6 +246,86 @@ def main() -> int:
         test_db,
     )
 
+    # Seed a deterministic student in the TEMPORARY test DB only.
+    # The real data/tco.db is never modified by this fixture.
+    seed_connection = sqlite3.connect(test_db)
+    try:
+        seed_connection.execute(
+            """
+            INSERT INTO students (
+                student_no,
+                university_roll,
+                name,
+                email,
+                class_level,
+                section,
+                school_id,
+                is_active,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            """,
+            (
+                "GMAIL_TEST_001",
+                "TCO_TEST_ROLL_001",
+                "TCO Integration Test Student",
+                "electrofact3@gmail.com",
+                "TCO Test Class",
+                "TEST",
+                "TCO_TEST",
+                1,
+            ),
+        )
+        # Seed the assessment expected by this integration test.
+        # This runs only against the temporary test database.
+        seed_connection.execute(
+            """
+            INSERT INTO assessments (
+                id,
+                title,
+                subject,
+                chapter,
+                topic,
+                class_level,
+                section,
+                total_marks,
+                question_count,
+                generation_mode,
+                form_id,
+                responder_url,
+                status,
+                created_by,
+                school_id,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                10,
+                'TCO Evaluation Integration Test',
+                'Digital Logic',
+                'Binary Arithmetic',
+                'Arithmetic Shift',
+                'TCO Test Class',
+                'TEST',
+                8,
+                2,
+                'source_grounded',
+                'integration-test-form',
+                '',
+                'approved',
+                'TCO_TEST',
+                'TCO_TEST',
+                datetime('now'),
+                datetime('now')
+            )
+            """
+        )
+
+        seed_connection.commit()
+    finally:
+        seed_connection.close()
+
     print(
         "Source DB:",
         SOURCE_DB,

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+import sys
 import tempfile
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DB = PROJECT_ROOT / "data" / "tco.db"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 class FakeMetadataTool:
@@ -203,6 +206,60 @@ def find_test_student(db_path: Path) -> dict:
         connection.close()
 
 
+def seed_test_records(db_path: Path) -> None:
+    """Seed only the isolated records used by this fake-provider fixture."""
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO students (
+                student_no, university_roll, name, email,
+                class_level, section, school_id,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "GMAIL_TEST_001",
+                "GMAIL_TEST_001",
+                "Controlled Result Email Student",
+                "electrofact3@gmail.com",
+                "TCO Test Class",
+                "TEST",
+                "TCO_TEST",
+                "2026-10-05T00:00:00Z",
+                "2026-10-05T00:00:00Z",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO assessments (
+                id, title, subject, topic, class_level, section,
+                total_marks, question_count, generation_mode,
+                form_id, responder_url, status, created_by, school_id,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                10,
+                "Result Email Integration Assessment",
+                "Computer Science",
+                "Booth Algorithm",
+                "TCO Test Class",
+                "TEST",
+                5,
+                2,
+                "test_fixture",
+                "result-email-integration-form",
+                "https://example.test/forms/result-email-integration-form",
+                "published",
+                "TCO_TEST_TEACHER",
+                "TCO_TEST",
+                "2026-10-05T00:00:00Z",
+                "2026-10-05T00:00:00Z",
+            ),
+        )
+        connection.commit()
+
+
 def build_services(
     *,
     test_db: Path,
@@ -280,6 +337,7 @@ def main() -> int:
     test_db = temp_dir / "tco_test.db"
 
     shutil.copy2(SOURCE_DB, test_db)
+    seed_test_records(test_db)
 
     print("Source DB:", SOURCE_DB)
     print("Test DB:  ", test_db)

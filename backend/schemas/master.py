@@ -25,6 +25,7 @@ class MasterDecision(BaseModel):
         "student_support",
         "communication",
         "evaluation",
+        "copy_checking",
         "result",
         "source_request",
         "summarization",

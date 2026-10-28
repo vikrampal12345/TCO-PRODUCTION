@@ -1,0 +1,1120 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from PIL import Image
+
+from backend.copy_checker.schemas.extraction import (
+    ExtractedAnswer,
+    PageExtractionResult,
+)
+from backend.copy_checker.services.answer_extraction_service import (
+    AnswerExtractionService,
+)
+from backend.copy_checker.services.in_memory_vision_service import (
+    InMemoryVisionService,
+)
+
+
+class InMemoryAnswerExtractionService(
+    AnswerExtractionService
+):
+    """
+    Whole-page handwritten answer extraction.
+
+    IMPORTANT:
+    - No page tiling.
+    - Complete page is sent as one image.
+    - Model returns a document-style content structure.
+    - Deterministic code converts answer content into
+      the existing ExtractedAnswer contract.
+    """
+
+    WHOLE_PAGE_PROMPT = r"""
+You are extracting ALL handwritten content from ONE COMPLETE page of a
+student answer sheet.
+
+Your ONLY job is transcription/extraction.
+DO NOT grade.
+DO NOT evaluate correctness.
+DO NOT solve questions.
+DO NOT summarize.
+DO NOT shorten.
+DO NOT rewrite the student's answer.
+
+CRITICAL RULE:
+EVERY handwritten student answer must be extracted, regardless of length.
+
+An answer may be:
+- one letter such as A/B/C/D
+- True/False
+- a word or short phrase
+- a sentence
+- a paragraph
+- a long subjective answer
+- multiple paragraphs
+- bullet points
+- numbered steps
+- calculations
+- numerical work
+- formulas/equations
+- tables
+- diagram labels or written diagram information
+- mixed handwritten content
+
+VERY IMPORTANT:
+A long paragraph is still an ANSWER.
+Never skip a paragraph just because it is long.
+Never extract only MCQs or short answers.
+Continue reading the COMPLETE PAGE from top to bottom.
+
+QUESTION NUMBER:
+The question number may appear on the left, above the answer, on the same
+line, circled, underlined, separated from the answer, or in another position.
+Do not assume one fixed location.
+
+For each recognizable student answer:
+1. identify its question number if visible/readable;
+2. copy the student's actual written content as closely as possible;
+3. preserve the complete answer;
+4. preserve bullets, steps, numbers, formulas and equations;
+5. preserve line meaning and paragraph content;
+6. do not replace a long answer with a summary.
+
+If handwriting is genuinely unreadable:
+use "[UNCLEAR]" and a lower confidence.
+
+DO NOT invent questions or answers.
+
+Return ONLY valid JSON.
+
+Use exactly this structure:
+
+{
+  "page_number": 1,
+  "page_type": "handwritten_answer_sheet",
+  "content": [
+    {
+      "question_no": 1,
+      "content_type": "answer",
+      "text": "complete student-written answer",
+      "confidence": 0.95
+    }
+  ],
+  "other_content": [],
+  "review_required": false,
+  "warnings": []
+}
+
+IMPORTANT:
+- Put ALL handwritten student answers inside "content".
+- Use "content_type": "answer" for both short answers and long paragraphs.
+- Do NOT put student answers inside "other_content".
+- Do NOT omit a question because its answer is long.
+- Do NOT stop after finding a few answers.
+- Read the whole page before returning the JSON.
+"""
+
+    RECOVERY_PROMPT = r"""
+You are performing a second careful reading of ONE COMPLETE PAGE
+of a student's handwritten answer sheet.
+
+Previous extraction verification reported this feedback:
+
+{feedback}
+
+Target question numbers:
+
+{targets}
+
+Re-read the COMPLETE ORIGINAL PAGE.
+
+Focus carefully on the target questions while using the complete page
+to understand the question-answer boundaries.
+
+Do NOT grade.
+Do NOT solve.
+Do NOT invent.
+Do NOT rewrite the student's answer.
+
+Return the student's actual written answer as closely as possible.
+
+If it is still genuinely unreadable, return "[UNCLEAR]".
+
+Return ONLY valid JSON using exactly this structure:
+
+{
+  "page_number": 1,
+  "page_type": "handwritten_answer_sheet",
+  "content": [
+    {
+      "question_no": 4,
+      "content_type": "answer",
+      "text": "student answer",
+      "confidence": 0.85
+    }
+  ],
+  "other_content": [],
+  "review_required": false,
+  "warnings": []
+}
+"""
+
+    def __init__(
+        self,
+        vision_service: InMemoryVisionService | None = None,
+    ) -> None:
+
+        self.vision_service = (
+            vision_service
+            or InMemoryVisionService()
+        )
+
+    # ========================================================
+    # MODEL CALL
+    # ========================================================
+
+    def _call_model(
+        self,
+        image: Image.Image,
+        prompt: str,
+        extraction_mode: str = "general",
+    ) -> dict[str, Any]:
+
+        result = (
+            self.vision_service
+            .analyze_pil_image(
+                image=image,
+                prompt=prompt,
+                max_dimension=2048,
+                jpeg_quality=95,
+                temperature=0,
+                extraction_mode=extraction_mode,
+            )
+        )
+
+        if not isinstance(
+            result,
+            dict,
+        ):
+            raise ValueError(
+                "Vision model returned an invalid "
+                "JSON object."
+            )
+
+        parsed = result.get(
+            "parsed"
+        )
+
+        if parsed is None:
+            parsed = result
+
+        if not isinstance(
+            parsed,
+            dict,
+        ):
+            raise ValueError(
+                "Vision model returned an invalid "
+                "JSON object."
+            )
+
+        return parsed
+
+    # ========================================================
+    # MODEL RESPONSE -> EXTRACTED ANSWERS
+    # ========================================================
+
+    def _parse_content(
+        self,
+        parsed: dict[str, Any],
+        page_no: int,
+    ) -> list[ExtractedAnswer]:
+
+        content = parsed.get(
+            "content",
+            [],
+        )
+
+        # -----------------------------------------------
+        # Compatibility with our temporary questions[]
+        # schema if the model ever returns it.
+        # -----------------------------------------------
+
+        if not isinstance(
+            content,
+            list,
+        ):
+
+            content = []
+
+        candidates = []
+
+        for item in content:
+
+            if not isinstance(
+                item,
+                dict,
+            ):
+                continue
+
+            content_type = str(
+                item.get(
+                    "content_type",
+                    "",
+                )
+            ).strip().lower()
+
+            if content_type != "answer":
+                continue
+
+            question_no = item.get(
+                "question_no"
+            )
+
+            text = item.get(
+                "text",
+                "[UNCLEAR]",
+            )
+
+            candidate = self.normalize_candidate(
+                item={
+                    "question_no": question_no,
+                    "answer": text,
+                    "confidence": item.get(
+                        "confidence",
+                        0.0,
+                    ),
+                },
+                source_tile=(
+                    f"page_{page_no:03d}"
+                ),
+            )
+
+            candidates.append(
+                candidate
+            )
+
+        # -----------------------------------------------
+        # Fallback if model returns questions[]
+        # -----------------------------------------------
+
+        if not candidates:
+
+            questions = parsed.get(
+                "questions",
+                [],
+            )
+
+            if isinstance(
+                questions,
+                list,
+            ):
+
+                for item in questions:
+
+                    if not isinstance(
+                        item,
+                        dict,
+                    ):
+                        continue
+
+                    candidate = self.normalize_candidate(
+                        item=item,
+                        source_tile=(
+                            f"page_{page_no:03d}"
+                        ),
+                    )
+
+                    candidates.append(
+                        candidate
+                    )
+
+        return candidates
+
+    # ========================================================
+    # WHOLE PAGE EXTRACTION
+    # ========================================================
+
+    def _extract_whole_page(
+        self,
+        image: Image.Image,
+        page_no: int,
+        prompt: str,
+        extraction_mode: str = "general",
+    ) -> list[ExtractedAnswer]:
+
+        parsed = self._call_model(
+            image=image,
+            prompt=prompt,
+            extraction_mode=extraction_mode,
+        )
+
+        print(
+            json.dumps(
+                parsed,
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        return self._parse_content(
+            parsed=parsed,
+            page_no=page_no,
+        )
+
+    # ========================================================
+    # WHOLE PAGE RECOVERY
+    # ========================================================
+
+    def run_recovery_in_memory(
+        self,
+        image: Image.Image,
+        page_no: int,
+        target_questions: list[int],
+        feedback: str | None,
+        extraction_mode: str = "general",
+    ) -> list[ExtractedAnswer]:
+
+        if not target_questions:
+            return []
+
+        prompt = (
+            self.RECOVERY_PROMPT
+            .replace(
+                "{feedback}",
+                feedback
+                or "Some answers require careful re-reading.",
+            )
+            .replace(
+                "{targets}",
+                ", ".join(
+                    f"Q{number}"
+                    for number in target_questions
+                ),
+            )
+        )
+
+        print()
+        print("=" * 70)
+        print(
+            "WHOLE-PAGE TARGETED RECOVERY"
+        )
+        print("=" * 70)
+        print(
+            "Target questions:",
+            target_questions,
+        )
+
+        candidates = self._extract_whole_page(
+            image=image,
+            page_no=page_no,
+            prompt=prompt,
+            extraction_mode=extraction_mode,
+        )
+
+        target_set = set(
+            target_questions
+        )
+
+        return [
+            candidate
+            for candidate in candidates
+            if candidate.question_no
+            in target_set
+        ]
+
+    # ========================================================
+    # EXTRACT ONE COMPLETE PAGE
+    # ========================================================
+
+    @staticmethod
+    def _build_question_type_guidance(
+        question_types: dict[int, str] | None,
+    ) -> str:
+        """
+        Build authoritative per-question extraction rules.
+
+        MCQ answers are restricted to A/B/C/D by prompt.
+        Subjective answers must remain complete text.
+        """
+        if not question_types:
+            return ""
+
+        lines = [
+            "",
+            "",
+            "QUESTION TYPE MAP (AUTHORITATIVE):",
+        ]
+
+        for question_no, question_type in sorted(
+            question_types.items()
+        ):
+            normalized = (
+                str(question_type)
+                .strip()
+                .lower()
+            )
+
+            lines.append(
+                f"Q{int(question_no)}: {normalized}"
+            )
+
+        lines.extend(
+            [
+                "",
+                "TYPE-SPECIFIC EXTRACTION RULES:",
+                "",
+                "MCQ:",
+                "- Extract ONLY the student's selected option.",
+                '- Text MUST be "A", "B", "C", "D", or "BLANK" when no option is visible.',
+                "- Never copy the question.",
+                "- Never copy the option text.",
+                "- Never add explanation.",
+                "",
+                "SHORT ANSWER / SUBJECTIVE:",
+                "- Extract the COMPLETE readable handwritten answer.",
+                "- Preserve the student's actual wording.",
+                "- Do NOT convert the answer into A/B/C/D.",
+                "- Do NOT summarize.",
+                "- Do NOT shorten.",
+                "",
+                "TRUE/FALSE:",
+                "- Preserve the student's written response.",
+                "",
+                "FILL-IN:",
+                "- Preserve the written value.",
+                "",
+                "NUMERICAL / FORMULA:",
+                "- Preserve numbers, units, calculations, formulas and equations.",
+                "",
+                "DIAGRAM / MIXED:",
+                "- Preserve visible student-written content appropriate to the question.",
+                "",
+                "CRITICAL MIXED-PAGE RULE:",
+                "- Apply the rule individually to each question number.",
+                "- NEVER apply MCQ extraction rules to subjective questions.",
+                "",
+                "EXAMPLE:",
+                'Q20: mcq -> "B"',
+                'Q21: short_answer -> complete handwritten answer',
+                'Q22: short_answer -> complete handwritten answer',
+            ]
+        )
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _crop_mcq_region(
+        image: Image.Image,
+        question_numbers: list[int],
+    ) -> Image.Image:
+        """Crop and enlarge one MCQ answer row for the demo sheet."""
+        if len(question_numbers) != 1:
+            return image.copy()
+
+        q_no = int(question_numbers[0])
+        if q_no < 1 or q_no > 20:
+            return image.copy()
+
+        width, height = image.size
+
+        # Calibrated for Student_19.pdf's vertical left-column layout.
+        center_fraction = 0.158 + (q_no - 1) * 0.0257
+        half_height_fraction = 0.014
+
+        # Crop only the answer-letter column, excluding circled question numbers.
+        left = int(width * 0.145)
+        right = int(width * 0.23)
+        top = max(0, int((center_fraction - half_height_fraction) * height))
+        bottom = min(height, int((center_fraction + half_height_fraction) * height))
+
+        cropped = image.crop((left, top, right, bottom))
+        enlarged = cropped.resize(
+            (cropped.width * 3, cropped.height * 3),
+            Image.Resampling.LANCZOS,
+        )
+        cropped.close()
+
+        print(
+            f"MCQ single-row crop Q{q_no}:",
+            enlarged.size,
+        )
+        return enlarged
+
+    def extract_page_in_memory(
+        self,
+        image: Image.Image,
+        page_no: int,
+        expected_question_numbers: list[int] | None = None,
+        enable_recovery: bool = True,
+        feedback: str | None = None,
+        extraction_mode: str = "general",
+        question_types: dict[int, str] | None = None,
+    ) -> PageExtractionResult:
+
+        if not isinstance(
+            image,
+            Image.Image,
+        ):
+            raise TypeError(
+                "image must be a PIL.Image.Image"
+            )
+
+        expected_question_numbers = sorted(
+            {
+                int(number)
+                for number in (
+                    expected_question_numbers
+                    or []
+                )
+            }
+        )
+
+        normalized_question_types = {
+            int(number): (
+                str(question_type)
+                .strip()
+                .lower()
+            )
+            for number, question_type in (
+                question_types or {}
+            ).items()
+        }
+
+        # ====================================================
+        # QUESTION-TYPE CLASSIFICATION
+        # ====================================================
+
+        mcq_types = {
+            "mcq",
+            "objective",
+        }
+
+        mcq_questions = sorted(
+            question_no
+            for question_no, question_type
+            in normalized_question_types.items()
+            if page_no == 1 and question_type in mcq_types
+        )
+
+        non_mcq_questions = sorted(
+            question_no
+            for question_no, question_type
+            in normalized_question_types.items()
+            if question_type not in mcq_types
+        )
+
+        print()
+        print("=" * 70)
+        print(
+            f"TYPE-AWARE WHOLE-PAGE EXTRACTION "
+            f"FOR PAGE {page_no}"
+        )
+        print("=" * 70)
+
+        print(
+            "MCQ question numbers:",
+            mcq_questions,
+        )
+
+        print(
+            "Non-MCQ question numbers:",
+            non_mcq_questions,
+        )
+
+        # ====================================================
+        # FALLBACK
+        # ====================================================
+
+        if not normalized_question_types:
+
+            initial_candidates = (
+                self._extract_whole_page(
+                    image=image,
+                    page_no=page_no,
+                    prompt=(
+                        self.WHOLE_PAGE_PROMPT
+                        + (
+                            "\n\nPrevious verifier feedback:\n"
+                            + feedback
+                            if feedback
+                            else ""
+                        )
+                    ),
+                    extraction_mode=extraction_mode,
+                )
+            )
+
+        else:
+
+            initial_candidates = []
+
+            # =================================================
+            # PASS 1: MCQ ONLY
+            # =================================================
+
+            if mcq_questions:
+
+                # Keep the VLM response small and focused.
+                # Twenty MCQs in one generation was truncating.
+                mcq_chunk_size = 1
+
+                for chunk_start in range(
+                    0,
+                    len(mcq_questions),
+                    mcq_chunk_size,
+                ):
+
+                    mcq_chunk = mcq_questions[
+                        chunk_start:
+                        chunk_start
+                        + mcq_chunk_size
+                    ]
+
+                    mcq_prompt = (
+                        self.WHOLE_PAGE_PROMPT
+                        + "\n\n"
+                        + """
+============================================================
+MCQ-ONLY EXTRACTION PASS
+============================================================
+
+Process ONLY the MCQ questions listed below.
+
+Do NOT process subjective or any other question type.
+
+Authoritative question numbers for THIS PASS:
+"""
+                        + ", ".join(
+                            f"Q{number}"
+                            for number in mcq_chunk
+                        )
+                        + """
+
+For every visible MCQ question in this list:
+
+- Extract ONLY the student's selected option.
+- The answer MUST be exactly one of:
+  A
+  B
+  C
+  D
+  BLANK
+- Use BLANK only when no selected option is visibly written for this question.
+- Read only the single question row in the crop.
+- Never guess or reuse another question's answer.
+
+- Never copy question text.
+- Never copy option text.
+- Never provide explanation.
+- Never repeat the selected letter.
+- Never invent an answer.
+- Ignore every question number not in this pass.
+
+IMPORTANT:
+Complete THIS exact question range before returning JSON.
+
+Return only valid JSON.
+"""
+                        + (
+                            "\n\nPrevious verifier feedback:\n"
+                            + feedback
+                            if feedback
+                            else ""
+                        )
+                    )
+
+                    print()
+                    print(
+                        "RUNNING MCQ EXTRACTION PASS:"
+                    )
+                    print(
+                        [
+                            f"Q{number}"
+                            for number
+                            in mcq_chunk
+                        ]
+                    )
+
+                    mcq_image = (
+                        self._crop_mcq_region(
+                            image=image,
+                            question_numbers=mcq_chunk,
+                        )
+                    )
+
+                    try:
+
+                        chunk_candidates = (
+                            self._extract_whole_page(
+                                image=mcq_image,
+                                page_no=page_no,
+                                prompt=(
+                                    "The provided image is a "
+                                    "CROP of the MCQ section of "
+                                    "the answer sheet. "
+                                    "Focus only on handwritten "
+                                    "answers visible in this crop.\n\n"
+                                    + mcq_prompt
+                                ),
+                                extraction_mode="mcq",
+                            )
+                        )
+
+                    finally:
+
+                        try:
+                            mcq_image.close()
+                        except Exception:
+                            pass
+
+                    allowed_mcq = set(
+                        mcq_chunk
+                    )
+
+                    chunk_candidates = [
+                        candidate
+                        for candidate
+                        in chunk_candidates
+                        if getattr(
+                            candidate,
+                            "question_no",
+                            None,
+                        )
+                        in allowed_mcq
+                    ]
+
+                    initial_candidates.extend(
+                        chunk_candidates
+                    )
+
+                    print(
+                        "MCQ candidates accepted:",
+                        [
+                            getattr(
+                                candidate,
+                                "question_no",
+                                None,
+                            )
+                            for candidate
+                            in chunk_candidates
+                        ],
+                    )
+
+            # =================================================
+            # PASS 2: NON-MCQ ONLY
+            # =================================================
+
+            if non_mcq_questions:
+
+                non_mcq_prompt = (
+                    self.WHOLE_PAGE_PROMPT
+                    + "\n\n"
+                    + """
+============================================================
+NON-MCQ EXTRACTION PASS
+============================================================
+
+Process ONLY non-MCQ questions.
+
+Do NOT extract MCQ/objective questions.
+
+The authoritative non-MCQ question numbers are:
+"""
+                    + ", ".join(
+                        f"Q{number}"
+                        for number
+                        in non_mcq_questions
+                    )
+                    + """
+
+For short-answer / subjective questions:
+- Extract the COMPLETE readable handwritten answer.
+- Preserve the student's actual wording.
+- Do NOT reduce the answer to A/B/C/D.
+- Do NOT summarize.
+- Do NOT shorten the answer.
+
+For numerical/formula/diagram/mixed questions:
+- Preserve the student's written response,
+  calculations, formulas, units, symbols, and visible
+  relevant content.
+
+IMPORTANT:
+This is ONLY the non-MCQ pass.
+Ignore MCQ answers even when they are visible on the
+same page.
+
+Do not invent answers for questions that are not visible.
+
+Return only the required JSON.
+"""
+                    + (
+                        "\n\nPrevious verifier feedback:\n"
+                        + feedback
+                        if feedback
+                        else ""
+                    )
+                )
+
+                print()
+                print(
+                    "RUNNING NON-MCQ EXTRACTION PASS"
+                )
+
+                non_mcq_candidates = (
+                    self._extract_whole_page(
+                        image=image,
+                        page_no=page_no,
+                        prompt=non_mcq_prompt,
+                        extraction_mode="general",
+                    )
+                )
+
+                allowed_non_mcq = set(
+                    non_mcq_questions
+                )
+
+                non_mcq_candidates = [
+                    candidate
+                    for candidate in non_mcq_candidates
+                    if getattr(
+                        candidate,
+                        "question_no",
+                        None,
+                    ) in allowed_non_mcq
+                ]
+
+                initial_candidates.extend(
+                    non_mcq_candidates
+                )
+
+                print(
+                    "Non-MCQ candidates accepted:",
+                    [
+                        getattr(
+                            candidate,
+                            "question_no",
+                            None,
+                        )
+                        for candidate
+                        in non_mcq_candidates
+                    ],
+                )
+
+        # ====================================================
+        # MERGE
+        # ====================================================
+
+        (
+            initial_questions,
+            initial_unresolved,
+            initial_warnings,
+        ) = self.merge_candidates(
+            initial_candidates
+        )
+
+        # ====================================================
+        # EXPECTED QUESTIONS
+        # ====================================================
+
+        missing_questions = (
+            self.find_missing_questions(
+                initial_questions,
+                expected_question_numbers,
+            )
+        )
+
+        recovery_targets = (
+            self.find_recovery_targets(
+                initial_questions,
+                missing_questions,
+            )
+        )
+
+        # ====================================================
+        # EMPTY EXTRACTION
+        # ====================================================
+
+        if not initial_questions:
+
+            initial_warnings.append(
+                "No question-answer pairs were "
+                "extracted from the complete page."
+            )
+
+        # ====================================================
+        # RECOVERY
+        # ====================================================
+
+        recovery_candidates = []
+
+        recovery_attempted = False
+
+        if (
+            enable_recovery
+            and recovery_targets
+        ):
+
+            recovery_attempted = True
+
+            recovery_candidates = (
+                self.run_recovery_in_memory(
+                    image=image,
+                    page_no=page_no,
+                    target_questions=recovery_targets,
+                    feedback=(
+                        feedback
+                        or "Re-read uncertain answers carefully."
+                    ),
+                    extraction_mode=extraction_mode,
+                )
+            )
+
+        # ====================================================
+        # FINAL MERGE
+        # ====================================================
+
+        combined_candidates = (
+            initial_candidates
+            + recovery_candidates
+        )
+
+        (
+            final_questions,
+            final_unresolved,
+            final_warnings,
+        ) = self.merge_candidates(
+            combined_candidates
+        )
+
+        final_missing = (
+            self.find_missing_questions(
+                final_questions,
+                expected_question_numbers,
+            )
+        )
+
+        warnings = []
+
+        for warning in (
+            initial_warnings
+            + final_warnings
+        ):
+
+            if warning not in warnings:
+                warnings.append(
+                    warning
+                )
+
+        if final_missing:
+
+            warnings.append(
+                "Missing expected question(s): "
+                + ", ".join(
+                    f"Q{number}"
+                    for number in final_missing
+                )
+            )
+
+        if recovery_attempted:
+
+            warnings.append(
+                "Whole-page targeted recovery "
+                "was attempted."
+            )
+
+        review_required = bool(
+            not final_questions
+            or final_missing
+            or final_unresolved
+            or any(
+                item.status
+                == "REVIEW_REQUIRED"
+                for item in final_questions
+            )
+        )
+
+        # ====================================================
+        # FINAL LOG
+        # ====================================================
+
+        print()
+        print("=" * 70)
+        print(
+            "FINAL TYPE-AWARE EXTRACTION"
+        )
+        print("=" * 70)
+
+        for item in final_questions:
+
+            print(
+                f"Q{item.question_no}: "
+                f"{item.answer} | "
+                f"confidence={item.confidence:.2f} | "
+                f"status={item.status}"
+            )
+
+        print()
+        print(
+            "Review required:",
+            review_required,
+        )
+
+        return PageExtractionResult(
+            page_no=page_no,
+            questions=final_questions,
+            unresolved_items=final_unresolved,
+            missing_questions=final_missing,
+            review_required=review_required,
+            warnings=warnings,
+            processed_tiles=1,
+            recovery_attempted=recovery_attempted,
+            recovery_tiles=(
+                1
+                if recovery_attempted
+                else 0
+            ),
+        )
+
+    def extract_pdf_in_memory(
+        self,
+        pdf_path: str,
+        page_processor,
+        expected_question_numbers: list[int] | None = None,
+        enable_recovery: bool = True,
+    ):
+
+        results = []
+
+        for page_no, image in page_processor.iter_pages(
+            pdf_path
+        ):
+
+            try:
+
+                result = (
+                    self.extract_page_in_memory(
+                        image=image,
+                        page_no=page_no,
+                        expected_question_numbers=(
+                            expected_question_numbers
+                        ),
+                        enable_recovery=enable_recovery,
+                    )
+                )
+
+                results.append(
+                    result
+                )
+
+            finally:
+
+                try:
+                    image.close()
+                except Exception:
+                    pass
+
+        return results
+

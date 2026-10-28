@@ -34,6 +34,161 @@ class ResultStore:
             raise ResultStoreError(
                 f"Database file does not exist: {self.db_path}"
             )
+        self._ensure_schema()
+
+
+    def _ensure_schema(self) -> None:
+        """Create the additive result-storage schema without altering legacy tables."""
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            missing = {"students", "assessments"} - tables
+            if missing:
+                raise ResultStoreError(
+                    "Cannot initialize result storage; missing base tables: "
+                    + ", ".join(sorted(missing))
+                )
+
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS assessment_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    assessment_id INTEGER NOT NULL,
+                    student_id INTEGER NOT NULL,
+                    attempt_number INTEGER NOT NULL DEFAULT 1,
+                    student_name TEXT NOT NULL,
+                    student_email TEXT NOT NULL,
+                    started_at TEXT,
+                    submitted_at TEXT NOT NULL,
+                    obtained_marks REAL NOT NULL,
+                    total_marks REAL NOT NULL,
+                    percentage REAL NOT NULL,
+                    correct_answers INTEGER NOT NULL DEFAULT 0,
+                    wrong_answers INTEGER NOT NULL DEFAULT 0,
+                    unanswered INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'evaluated',
+                    form_response_id TEXT,
+                    answers_json TEXT,
+                    question_results_json TEXT,
+                    result_email_status TEXT NOT NULL DEFAULT 'not_sent',
+                    result_email_sent_at TEXT,
+                    result_email_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE (assessment_id, student_id, attempt_number),
+                    FOREIGN KEY (assessment_id)
+                        REFERENCES assessments(id) ON DELETE CASCADE,
+                    FOREIGN KEY (student_id)
+                        REFERENCES students(id) ON DELETE CASCADE
+                )
+            """)
+
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_attempts_student_submitted
+                ON assessment_attempts(student_id, submitted_at)
+            """)
+
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_attempts_assessment
+                ON assessment_attempts(assessment_id, attempt_number)
+            """)
+
+            assessment_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(assessments)"
+                ).fetchall()
+            }
+
+            if "created_at" in assessment_columns:
+                test_date_expression = (
+                    "COALESCE(NULLIF(a.created_at, ''), aa.submitted_at)"
+                )
+                date_expression_token = "coalesce(nullif(a.created_at"
+            elif "test_date" in assessment_columns:
+                test_date_expression = (
+                    "COALESCE(NULLIF(a.test_date, ''), aa.submitted_at)"
+                )
+                date_expression_token = "coalesce(nullif(a.test_date"
+            else:
+                test_date_expression = "aa.submitted_at"
+                date_expression_token = "aa.submitted_at as test_date"
+
+            view_row = connection.execute("""
+                SELECT sql FROM sqlite_master
+                WHERE type='view' AND name='student_result_view'
+            """).fetchone()
+
+            if view_row:
+                old_sql = (view_row[0] or "").lower()
+                required_tokens = (
+                    "result_id",
+                    "student_school_id",
+                    "assessment_class_level",
+                    "assessment_section",
+                    "result_email_status",
+                    "test_date",
+                    date_expression_token,
+                )
+                if not all(token in old_sql for token in required_tokens):
+                    connection.execute("DROP VIEW student_result_view")
+                    view_row = None
+
+            if not view_row:
+                connection.execute(f"""
+                    CREATE VIEW student_result_view AS
+                    SELECT
+                        aa.id AS result_id,
+                        aa.id AS id,
+                        aa.assessment_id,
+                        aa.student_id,
+                        aa.attempt_number,
+                        aa.student_name,
+                        aa.student_email,
+                        aa.started_at,
+                        aa.submitted_at,
+                        aa.obtained_marks,
+                        aa.total_marks,
+                        aa.percentage,
+                        aa.correct_answers,
+                        aa.wrong_answers,
+                        aa.unanswered,
+                        aa.status AS result_status,
+                        aa.form_response_id,
+                        aa.answers_json,
+                        aa.question_results_json,
+                        aa.result_email_status,
+                        aa.result_email_sent_at,
+                        aa.result_email_error,
+                        aa.created_at,
+                        aa.updated_at,
+                        a.title AS assessment_title,
+                        a.title AS title,
+                        a.subject,
+                        a.chapter,
+                        a.topic,
+                        a.class_level AS assessment_class_level,
+                        a.section AS assessment_section,
+                        a.school_id AS assessment_school_id,
+                        s.school_id AS school_id,
+                        s.school_id AS student_school_id,
+                        s.class_level AS student_class_level,
+                        s.section AS student_section,
+                        {test_date_expression} AS test_date,
+                        a.form_id
+                    FROM assessment_attempts AS aa
+                    JOIN assessments AS a
+                        ON a.id = aa.assessment_id
+                    JOIN students AS s
+                        ON s.id = aa.student_id
+                """)
+
+            connection.commit()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
@@ -137,7 +292,7 @@ class ResultStore:
                     class_level,
                     section,
                     total_marks,
-                    test_date,
+                    created_at AS test_date,
                     school_id,
                     form_id
                 FROM assessments
@@ -198,6 +353,9 @@ class ResultStore:
                     form_response_id = excluded.form_response_id,
                     answers_json = excluded.answers_json,
                     question_results_json = excluded.question_results_json,
+                    result_email_status = 'not_sent',
+                    result_email_sent_at = NULL,
+                    result_email_error = NULL,
                     updated_at = excluded.updated_at
                 """,
                 (

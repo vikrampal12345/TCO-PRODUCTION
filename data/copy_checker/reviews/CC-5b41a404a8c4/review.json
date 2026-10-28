@@ -1,0 +1,22 @@
+{
+  "job_id": "CC-5b41a404a8c4",
+  "status": "review_required",
+  "grading_started": false,
+  "student_number": "Student_Orch",
+  "required_capability": "copy_checking.grade",
+  "page_limit": 2,
+  "created_at": "2026-10-21T20:08:04.702861+00:00",
+  "reason": "Extraction requires teacher verification.",
+  "aggregated_submission": null,
+  "input_filenames": {
+    "question_paper": "Question.txt",
+    "marking_scheme": "answerkey.txt",
+    "answer_copy": "Student_Orch.pdf"
+  },
+  "retained_inputs": {
+    "question_paper": "inputs\\question_paper.txt",
+    "marking_scheme": "inputs\\marking_scheme.txt",
+    "answer_copy": "inputs\\answer_copy.pdf"
+  },
+  "next_step": "Review the incomplete extraction. Do not publish marks until the complete answer sheet has been checked."
+}
